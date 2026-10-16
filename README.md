@@ -19,4 +19,4 @@ The original source was not found in the two requested GitHub repositories. Past
 
 ## Validation
 
-JavaScript DOM checks cover spice selection, quantities, totals, request saving/restoration, clearing and persisted state, delivery validation, favorites and HTML escaping. Browser visual comparison was not available in the execution environment.
+JavaScript logic checks with a minimal DOM stub cover spice selection, quantities, totals, request saving/restoration, clearing and persisted state, delivery validation, favorites and HTML escaping. They do not verify browser rendering. Browser visual comparison was not available in the execution environment.
