@@ -1,0 +1,57 @@
+// 同步：文件导出/导入（iOS 隔空投送）、二维码、GitHub Gist（可选）
+import { mem, put } from './store.js';
+export function snapshot({ thumbs = true } = {}) {
+  return {
+    app: 'vocab-app', v: 1, at: Date.now(),
+    items: [...mem.items.values()],
+    pages: [...mem.pages.values()].map(p => thumbs ? p : { ...p, thumb: '' }),
+    kv: [...mem.kv.values()].filter(k => !String(k.id).startsWith('tr:') && !['gistToken'].includes(k.id)),
+  };
+}
+/** 合并：同 id 以 updated 新者为准；复习记录取复习次数多/更晚的 */
+export async function merge(data) {
+  if (!data || data.app !== 'vocab-app') throw new Error('不是本应用的备份文件');
+  let added = 0, updated = 0;
+  for (const store of ['pages', 'items', 'kv']) for (const r of data[store] || []) {
+    if (!r || typeof r.id !== 'string' || (store === 'kv' && r.id === 'gistToken')) continue;
+    if (store === 'items' && typeof r.text !== 'string') continue;
+    if (store === 'pages' && (!Array.isArray(r.units) || r.units.some(u => !u || typeof u.text !== 'string'))) continue;
+    const cur = mem[store].get(r.id);
+    if (!cur) { await put(store, r); added++; }
+    else if ((r.updated || 0) > (cur.updated || 0)) { if (store === 'pages' && !r.thumb) r.thumb = cur.thumb; await put(store, r); updated++; }
+  }
+  return { added, updated };
+}
+export async function toB64(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  const cs = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  const buf = new Uint8Array(await new Response(cs).arrayBuffer());
+  let s = ''; for (const b of buf) s += String.fromCharCode(b); return btoa(s);
+}
+export async function fromB64(b64) {
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const ds = new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return JSON.parse(await new Response(ds).text());
+}
+// 二维码只放精简数据（单词+释义+复习进度），不含图片
+export function compact() {
+  return { app: 'vocab-app', v: 1, at: Date.now(), c: 1, items: [...mem.items.values()].map(i => [i.text, i.cn || '', i.srs ? [i.srs.reps, Math.round(i.srs.ease * 100), i.srs.interval, Math.round(i.srs.due / 60000), i.srs.lapses, i.srs.firstAt || 0, i.srs.last || 0] : 0, i.updated, i.page || '']) };
+}
+export function expand(c) {
+  return { app: 'vocab-app', v: 1, items: c.items.map(([text, cn, s, updated, page]) => ({ id: text.toLowerCase(), text, cn, page, updated, created: updated, srs: s ? { reps: s[0], ease: s[1] / 100, interval: s[2], due: s[3] * 60000, lapses: s[4], firstAt: s[5] || 0, last: s[6] || 0 } : null })) };
+}
+// ---- Gist ----
+const API = 'https://api.github.com/gists';
+const FILE = 'vocab-app-sync.json';
+export async function gistPush(token, gistId) {
+  const body = { description: '背单词同步（vocab-app）', public: false, files: { [FILE]: { content: JSON.stringify(snapshot({ thumbs: false })) } } };
+  const r = await fetch(gistId ? `${API}/${gistId}` : API, { method: gistId ? 'PATCH' : 'POST', headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('上传失败 ' + r.status); return (await r.json()).id;
+}
+export async function gistPull(token, gistId) {
+  const r = await fetch(`${API}/${gistId}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+  if (!r.ok) throw new Error('下载失败 ' + r.status);
+  const f = (await r.json()).files?.[FILE]; if (!f) throw new Error('没有同步数据');
+  const txt = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+  return merge(JSON.parse(txt));
+}
