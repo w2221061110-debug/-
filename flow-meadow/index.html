@@ -832,35 +832,12 @@ void main(){
     g.rotate(face); g.scale(su, sv); g.rotate(-face);
     { const sp = Math.hypot(L.vx, L.vy), st = Math.min(1, sp / (L.r0 * 9)); if (st > 0.01) { const va = Math.atan2(L.vy, L.vx); g.rotate(va); g.scale(1 + 0.09 * st, 1 - 0.05 * st); g.rotate(-va); } }
     g.translate(-bx, -by);
-    // trotting legs: diagonal pairs swing fore/aft, hooves peek out under the fleece
-    const ga = L.gait * (1 - Math.min(1, air * 2));
-    if (ga > 0.04) {
-      g.globalAlpha = Math.min(1, ga * 2.2); g.lineCap = 'round';
-      for (const [lu, lv] of [[0.55, 0.6], [0.55, -0.6], [-0.55, 0.62], [-0.55, -0.62]]) {
-        const pair = (lu > 0) === (lv > 0) ? 0 : Math.PI, sw = Math.sin(L.walkPh + pair), lift = Math.max(0, Math.cos(L.walkPh + pair));
-        // swinging leg reaches out past the fleece; planted leg tucks back under it
-        const [x0, y0] = P(lu * 0.75, lv * 0.75, s), [x1, y1] = P(lu * 1.0 + sw * 0.6 * ga, lv * (1.5 + 0.3 * lift * ga), s);
-        g.strokeStyle = '#a8957a'; g.lineWidth = r * 0.24; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-        g.strokeStyle = '#efe2cb'; g.lineWidth = r * 0.17; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-        g.fillStyle = lift > 0.2 ? '#6e5a4c' : '#4e3f36'; g.beginPath(); g.arc(x1, y1, r * (0.14 + 0.04 * lift), 0, 6.283); g.fill();
-      }
-      g.globalAlpha = 1;
-    }
-    // little legs/hooves peek out while airborne
-    if (air > 0.05) {
-      g.globalAlpha = Math.min(1, air * 1.8);
-      for (const [lu, lv] of [[0.55, 0.6], [0.55, -0.6], [-0.55, 0.62], [-0.55, -0.62]]) {
-        const [x0, y0] = P(lu * 0.8, lv * 0.7, s), [x1, y1] = P(lu * (1.1 + air * 0.15), lv * (1.25 + air * 0.3), s);
-        g.strokeStyle = '#e6d6bc'; g.lineWidth = r * 0.17; g.lineCap = 'round'; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-        g.fillStyle = '#5b4a3f'; g.beginPath(); g.arc(x1, y1, r * 0.13, 0, 6.283); g.fill();
-      }
-      g.globalAlpha = 1;
-    }
+    // no legs/hooves: the walk reads through body bob, side sway, head nod, tuft wobble and grass parting
     // rim tufts behind the coat: downwind ones billow out and flap, with a warm-grey rim for contrast
     for (const tf of S.tufts) {
       const ox = Math.cos(tf.th + face), oy = Math.sin(tf.th + face), wgt = Math.max(0, ox * nx + oy * ny) + 0.2;
       const flap = Math.sin(L.fl + tf.ph);
-      const out = r * m * wgt * (0.17 + 0.07 * flap), side = r * m * 0.03 * Math.cos(L.fl * 0.8 + tf.ph);
+      const out = r * m * wgt * (0.17 + 0.07 * flap) + r * 0.035 * L.gait * Math.sin(L.walkPh * 2 + tf.th * 2), side = r * m * 0.03 * Math.cos(L.fl * 0.8 + tf.ph);
       const [x0, y0] = P(tf.u, tf.v, s), x = x0 + nx * out - ny * side, y = y0 + ny * out + nx * side, rr = r * tf.s * (1 + wgt * m * 0.25);
       g.fillStyle = '#efe4cf'; g.strokeStyle = '#a8957a'; g.lineWidth = Math.max(1, r * 0.035);
       g.beginPath(); g.arc(x, y, rr, 0, 6.283); g.fill(); g.stroke();
