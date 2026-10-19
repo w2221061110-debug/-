@@ -1,5 +1,7 @@
 // 词典查询 + 在线翻译（多源回退 + 缓存）
 import { getKV, setKV } from './store.js';
+/** 词典或清洗规则变化时 +1，会触发已存单词重新翻译 */
+export const DICT_VERSION = 2;
 let dict = null, lemma = null, loading = null;
 export function loadDict() {
   if (dict) return Promise.resolve();

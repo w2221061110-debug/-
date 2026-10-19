@@ -138,10 +138,12 @@ video.scan{width:100%;border-radius:16px;background:#000}
 .btn svg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .btn,.chip,.ghost{white-space:nowrap}
 
-.sheet-wrap.nonmodal{background:transparent;pointer-events:none;animation:none;align-items:flex-end!important}
-.sheet-wrap.nonmodal .sheet{pointer-events:auto;box-shadow:0 -6px 30px rgba(0,0,0,.22);border-radius:26px 26px 0 0;padding-bottom:calc(16px + env(safe-area-inset-bottom));max-height:48dvh}
-@media (min-width:760px){.sheet-wrap.nonmodal{justify-content:flex-end;padding:0 24px 96px}.sheet-wrap.nonmodal .sheet{border-radius:22px;max-width:420px}}
+.sheet-wrap.nonmodal{background:transparent;pointer-events:none;animation:none;align-items:flex-end!important;bottom:var(--tabs-h,calc(74px + env(safe-area-inset-bottom)))}
+.sheet-wrap.nonmodal .sheet{animation:upsoft .22s ease-out}@keyframes upsoft{from{transform:scale(.97);opacity:0}}.sheet-wrap.nonmodal .sheet{transform-origin:50% 100%}
+.sheet-wrap.nonmodal .sheet{pointer-events:auto;box-shadow:0 -6px 30px rgba(0,0,0,.22);border-radius:26px 26px 0 0;padding-bottom:16px;max-height:calc(100dvh - var(--tabs-h,80px) - 120px)}
+@media (min-width:760px){.sheet-wrap.nonmodal{justify-content:flex-end;padding:0 24px 16px}.sheet-wrap.nonmodal .sheet{border-radius:22px;max-width:420px}}
 body.sheet-open main{padding-bottom:50dvh}
 /* 宽屏：释义面板固定在右侧，整页内容让出右边 444px，不再把卡片挤窄 */
 @media (min-width:1200px){body.sheet-open main{padding-bottom:24px}body.sheet-open #app{margin-right:444px;margin-left:max(16px,calc(100vw - 444px - 980px))}}
 body.sheet-open .toast{bottom:auto;top:calc(64px + env(safe-area-inset-top))}
+.toast.act{pointer-events:auto;display:flex;align-items:center;gap:10px}.toast-btn{background:var(--acc2);color:#1b1b1b;border-radius:999px;padding:4px 12px;font-weight:600;font-size:14px}
