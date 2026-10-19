@@ -1,4 +1,4 @@
-const V = 'shici-v5';
+const V = 'shici-v6';
 const SHELL = ['./', 'index.html', 'style.css', 'manifest.json', 'icon.png', 'data/dict.txt', 'js/app.js', 'js/store.js', 'js/parse.js', 'js/dict.js', 'js/speak.js', 'js/srs.js', 'js/sync.js', 'js/ocr.js', 'vendor/tesseract.min.js', 'vendor/worker.min.js', 'vendor/tesseract-core-simd-lstm.wasm.js', 'vendor/tesseract-core-lstm.wasm.js', 'vendor/eng.traineddata.gz', 'vendor/qrcode.min.js', 'vendor/jsQR.min.js'];
 // 必需文件一次性预缓存；体积大的 OCR 引擎/模型（约 11MB）尽力缓存，失败不影响安装（国内网络抖动时不至于整个离线功能失效）
 const CORE = SHELL.filter(f => !/tesseract|worker\.min|traineddata/.test(f)), BIG = SHELL.filter(f => !CORE.includes(f));
