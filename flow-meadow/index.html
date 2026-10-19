@@ -6,7 +6,7 @@
 <title>风里的小羊 · Flow v3</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#2f5a3a;touch-action:none;-webkit-user-select:none;user-select:none;font-family:-apple-system,"PingFang SC",sans-serif}
-canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;-webkit-touch-callout:none}
 #hint{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 82px);transform:translateX(-50%);color:#fffbea;font-size:13px;letter-spacing:.1em;padding:7px 14px;border-radius:20px;background:rgba(30,50,30,.28);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transition:opacity 1.2s;pointer-events:none;white-space:nowrap}
 #hint.off{opacity:0}
 #bar{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 22px);transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:999px;background:rgba(28,44,30,.38);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 4px 18px rgba(0,0,0,.18)}
@@ -27,7 +27,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
 <canvas id="ground"></canvas>
 <canvas id="gl"></canvas>
 <canvas id="c"></canvas>
-<div id="hint">轻触草地，起风 · 开声音</div>
+<div id="hint">拖着小羊滑 · 点草地它会跑过去</div>
 <div id="bar">
   <button id="gust" aria-label="来一阵风" title="来一阵风">
     <svg viewBox="0 0 24 24"><path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/></svg>
@@ -63,6 +63,21 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
     angle: 0.35,         // base direction (rad), slowly wanders
     t: 0,
     impulses: [],        // {x,y,dx,dy,r,life}
+    // grass parting around the moving lamb: the lamb itself + a short wake of points that spring back
+    lambPart: null, trail: [],   // {x,y,R,k}
+    part(x, y) {
+      let px = 0, py = 0, pg = 0;
+      const add = (cx, cy, R, k) => {
+        if (k > -0.01 && k < 0.01) return;
+        const dx = x - cx, dy = y - cy, lim = R * 2.3;
+        if (dx > lim || dx < -lim || dy > lim || dy < -lim) return;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1, q = (d - R * 0.75) / (R * 0.6), f = Math.exp(-q * q) * k;
+        px += dx / d * f; py += dy / d * f; pg += Math.abs(f);
+      };
+      const L = this.lambPart; if (L) add(L.x, L.y, L.R, L.k);
+      for (const p of this.trail) add(p.x, p.y, p.R, p.k);
+      return [px, py, pg];
+    },
     update(dt) {
       this.t += dt;
       this.angle = 0.35 + (noise2(this.t * 0.05, 3.1) - 0.5) * 0.9;
@@ -137,6 +152,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
     N.pk = ctx.createBiquadFilter(); N.pk.type = 'peaking'; N.pk.frequency.value = 5000; N.pk.gain.value = 6;
     N.rustG = ctx.createGain(); N.rustG.gain.value = 0;
     rs.connect(N.hp).connect(N.pk).connect(N.rustG).connect(N.bus);
+    N.stepBuf = noiseBuf(ctx, 0.2, false);
     src.start(0); rs.start(0);
     return N;
   }
@@ -165,6 +181,14 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
     o.start(t); lfo.start(t); o.stop(t + 1.1); lfo.stop(t + 1.1);
   }
 
+  // soft footstep rustle: a short band-passed noise tick (grass brushing the legs)
+  function step(N, t, amt) {
+    const ctx = N.ctx, b = ctx.createBufferSource(); b.buffer = N.stepBuf;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2200 + Math.random() * 1600; bp.Q.value = 0.9;
+    const env = ctx.createGain(); env.gain.setValueAtTime(0, t); env.gain.linearRampToValueAtTime(0.07 + 0.09 * Math.min(1, amt), t + 0.015); env.gain.setTargetAtTime(0, t + 0.03, 0.035);
+    b.connect(bp).connect(env).connect(N.master);
+    b.start(t, Math.random() * 0.05, 0.15);
+  }
   const A = { ctx: null, on: true, N: null, log: null };
   A.start = function () {
     if (A.ctx) { A.ctx.resume(); return; }
@@ -181,6 +205,10 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
     if (A.log) A.log.push(['b', simTime]);
     if (A.N) bleat(A.N, A.ctx.currentTime);
   };
+  A.step = function (simTime, amt) {
+    if (A.log) A.log.push(['s', simTime, amt]);
+    if (A.N && A.on) step(A.N, A.ctx.currentTime, amt);
+  };
   // Render a recorded log offline; returns a base64 16-bit stereo WAV.
   A.renderOffline = async function (log, duration, rate = 48000) {
     const ctx = new OfflineAudioContext(2, Math.ceil(duration * rate), rate);
@@ -188,6 +216,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
     let last = -1;
     for (const e of log) {
       if (e[0] === 'b') bleat(N, e[1]);
+      else if (e[0] === 's') step(N, e[1], e[2]);
       else if (e[1] - last >= 1 / 30 - 1e-6) { setLevel(N, e[2], e[3], e[1]); last = e[1]; }
     }
     const buf = await ctx.startRendering();
@@ -302,7 +331,8 @@ void main(){
     for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
       const s = W.at(i * cell, j * cell), o = (j * gw + i) * 4, q = (j * gw + i) * 3;
       wf[q] += (s[0] - wf[q]) * a; wf[q + 1] += (s[1] - wf[q + 1]) * a; wf[q + 2] += (s[2] - wf[q + 2]) * a;
-      const vx = wf[q], vy = wf[q + 1], g = wf[q + 2];
+      const pp = W.part(i * cell, j * cell);   // parting is added after the ease so it tracks the lamb without lag
+      const vx = wf[q] + pp[0], vy = wf[q + 1] + pp[1], g = wf[q + 2] + Math.min(0.6, pp[2] * 0.45);
       wbuf[o] = Math.max(0, Math.min(255, (vx / 4 + 0.5) * 255)); wbuf[o + 1] = Math.max(0, Math.min(255, (vy / 4 + 0.5) * 255));
       wbuf[o + 2] = Math.min(255, g / 1.5 * 255); wbuf[o + 3] = 255;
     }
@@ -402,7 +432,8 @@ void main(){
   const FLOWER = ['#f4a3bd', '#f8c4d3', '#fff4ea', '#fff4ea', '#b49ae6', '#86aeea', '#f6d77a'];
 
   const S = { w: 0, h: 0, dpr: 1, blades: [], flowers: [], landed: [], puffs: [], tufts: [], petals: [], curls: [], wisps: [], sprites: [], ground: null, tree: null, quality: 1,
-    lamb: { x: 0, y: 0, r: 40, face: -2.6, faceT: -2.6, hop: 0, look: 0, blink: 0, ear: 0, shake: 0 } };
+    lamb: { x: 0, y: 0, r: 40, r0: 40, face: -2.6, faceT: -2.6, hop: 0, look: 0, blink: 0, ear: 0, shake: 0,
+      vx: 0, vy: 0, mode: 'idle', tx: 0, ty: 0, gx: 0, gy: 0, walkPh: 0, gait: 0, mv: 0, trailAcc: 0 } };
 
   // ---- bristle stroke sprite: tapered bundle of streaks with dry-brush ends ----
   function strokeSprite(color, variant) {
@@ -559,7 +590,12 @@ void main(){
     S.petals = []; S.landed = [];
     const np = Math.min(140, (w * h) / 7500 | 0);
     for (let i = 0; i < np; i++) S.petals.push(spawnPetal({}, true));
-    const L = S.lamb; L.x = w * 0.58; L.y = h * 0.6; L.r = Math.max(30, Math.min(66, Math.min(w, h) * 0.1));
+    const L = S.lamb, ow = S.ow, oh = S.oh;
+    // keep the lamb where the user left it across resizes (phone toolbar show/hide)
+    if (ow) { L.x *= w / ow; L.y *= h / oh; } else { L.x = w * 0.58; L.y = h * 0.6; }
+    S.ow = w; S.oh = h;
+    L.r0 = Math.max(30, Math.min(66, Math.min(w, h) * 0.1)); L.mode = 'idle'; L.vx = L.vy = 0; W.trail.length = 0;
+    clampLamb(); L.r = L.r0 * depth(L.y);
     // wool curls in body space (u along body, v across)
     S.curls = [];
     for (let i = 0; i < 300; i++) {
@@ -582,6 +618,58 @@ void main(){
     return p;
   }
 
+  // ---------- lamb movement: drag (spring follow + glide) and walk-to (arrive steering) ----------
+  const depth = y => 1 + (y / (S.h || 1) - 0.6) * 0.35;           // slight perspective: lower on screen = closer = bigger
+  function bounds() {
+    const r = S.lamb.r0;
+    return [r * 2.0, S.w - r * 2.0, r * 2.0, S.h - Math.max(112, r * 2.6)];   // head reaches ~1.6r from centre, +hop/depth growth
+  }
+  function clampLamb() {
+    const L = S.lamb, [x0, x1, y0, y1] = bounds();
+    if (L.x < x0) { L.x = x0; L.vx = Math.max(0, L.vx) * 0.3; } else if (L.x > x1) { L.x = x1; L.vx = Math.min(0, L.vx) * 0.3; }
+    if (L.y < y0) { L.y = y0; L.vy = Math.max(0, L.vy) * 0.3; } else if (L.y > y1) { L.y = y1; L.vy = Math.min(0, L.vy) * 0.3; }
+  }
+  function clampPt(x, y) { const [x0, x1, y0, y1] = bounds(); return [Math.max(x0, Math.min(x1, x)), Math.max(y0, Math.min(y1, y))]; }
+  function moveLamb(dt, t) {
+    const L = S.lamb, r0 = L.r0;
+    const steps = dt > 0.02 ? 3 : 2, h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      if (L.mode === 'drag') {
+        // critically-ish damped spring toward the finger: follows closely with a little lag
+        const [tx, ty] = clampPt(L.tx + L.gx, L.ty + L.gy), K = 110, C = 2 * Math.sqrt(K) * 0.92;
+        L.vx += ((tx - L.x) * K - L.vx * C) * h; L.vy += ((ty - L.y) * K - L.vy * C) * h;
+      } else if (L.mode === 'glide') {
+        const f = Math.exp(-h * 3.2); L.vx *= f; L.vy *= f;
+        if (Math.hypot(L.vx, L.vy) < 6) { L.mode = 'idle'; }
+      } else if (L.mode === 'walk') {
+        const dx = L.tx - L.x, dy = L.ty - L.y, d = Math.hypot(dx, dy), vmax = r0 * 4.2;
+        const want = Math.min(vmax, d * 1.6), wx = d > 0.5 ? dx / d * want : 0, wy = d > 0.5 ? dy / d * want : 0;
+        // velocity eases toward the arrive speed (critically damped: no overshoot), with capped acceleration = gentle start
+        const e = 1 - Math.exp(-h * 6.5), cap = r0 * 10 * h;
+        let ax = (wx - L.vx) * e, ay = (wy - L.vy) * e; const al = Math.hypot(ax, ay); if (al > cap) { ax *= cap / al; ay *= cap / al; }
+        L.vx += ax; L.vy += ay;
+        if (d < 1.5 && Math.hypot(L.vx, L.vy) < 10) { L.mode = 'idle'; }
+      } else { const f = Math.exp(-h * 10); L.vx *= f; L.vy *= f; }
+      L.x += L.vx * h; L.y += L.vy * h;
+      clampLamb();
+    }
+    const sp = Math.hypot(L.vx, L.vy);
+    L.r = r0 * depth(L.y);
+    // gait strength + stride phase advance with distance travelled (feet don't skate)
+    const gT = Math.min(1, sp / (r0 * 1.4));
+    L.gait += (gT - L.gait) * Math.min(1, dt * 7);
+    const prevPh = L.walkPh; L.walkPh += sp * dt / (r0 * 0.4);
+    if (L.gait > 0.25 && Math.floor(L.walkPh / Math.PI) !== Math.floor(prevPh / Math.PI) && window.WindAudio) WindAudio.step(t, L.gait);
+    L.mv += (Math.min(1, sp / (r0 * 2.2)) - L.mv) * Math.min(1, dt * 5);
+    if (sp > r0 * 0.7) { L.faceT = Math.atan2(L.vy, L.vx); L.look = Math.max(L.look, 1.4); L.moving = true; } else L.moving = false;
+    // grass parting: lamb + wake of points that bend back with a small springy overshoot
+    W.lambPart = { x: L.x, y: L.y, R: L.r * 1.15, k: 0.15 + 0.95 * L.mv };
+    L.trailAcc += sp * dt;
+    if (L.trailAcc > L.r * 0.35 && L.mv > 0.08) { L.trailAcc = 0; W.trail.push({ x: L.x, y: L.y, R: L.r * 1.1, k: 0, k0: 0.15 + 0.95 * L.mv, age: 0 }); if (W.trail.length > 40) W.trail.shift(); }
+    for (const p of W.trail) { p.age += dt; p.k = p.k0 * Math.exp(-p.age * 2.2) * Math.cos(p.age * 3.2); }
+    while (W.trail.length && W.trail[0].age > 2.2) W.trail.shift();
+  }
+
   // ---------- drawing ----------
   const buckets = [];
   function drawGrass(g, t, layerFrom, layerTo, ring) {
@@ -593,7 +681,8 @@ void main(){
       const b = S.blades[i];
       if (b.layer < layerFrom || b.layer > layerTo) continue;
       if (layerFrom >= 3) { const dx = b.x - hx, dy = b.y - hy, d2 = dx * dx + dy * dy; if (d2 < rr2 || (ring && (d2 > rr2 * 4 || b.y < L.y + L.r * 0.55 || (b.x - fx) ** 2 + (b.y - fy) ** 2 < L.r * L.r * 3.2))) continue; }
-      const [vx, vy, gu] = W.at(b.x, b.y);
+      let [vx, vy, gu] = W.at(b.x, b.y);
+      { const pp = W.part(b.x, b.y), pk = ring ? 0.35 : 1; vx += pp[0] * pk; vy += pp[1] * pk; gu += Math.min(0.6, pp[2] * 0.45) * pk; }
       const m = Math.hypot(vx, vy), k = Math.min(1, m * 1.4);
       const mc = Math.min(1.3, m), flutter = Math.sin(t * 4 + b.ph) * (0.06 + mc * 0.08);
       const wa = Math.atan2(vy, vx) + flutter + b.curl * 0.3;
@@ -615,7 +704,8 @@ void main(){
 
   function drawFlowers(g, t) {
     for (const f of S.flowers) {
-      const [vx, vy, gu] = W.at(f.x, f.y);
+      let [vx, vy, gu] = W.at(f.x, f.y);
+      { const pp = W.part(f.x, f.y); vx += pp[0]; vy += pp[1]; }
       const sw = Math.sin(t * 3 + f.ph) * (1.5 + Math.min(1, gu) * 3);
       const x = f.x + vx * 9 + sw * 0.6, y = f.y + vy * 9 + sw * 0.3;
       g.fillStyle = f.c;
@@ -706,12 +796,12 @@ void main(){
     L.fl = (L.fl || 0) + dt * 6.283 * (1.1 + 0.6 * Math.min(1, m));   // soft tuft flutter ~1.1-1.7 Hz
     L.look = Math.max(0, L.look - dt);
     
-    let d = L.faceT - L.face; d = Math.atan2(Math.sin(d), Math.cos(d)); L.face += d * Math.min(1, dt * 1.6);
+    let d = L.faceT - L.face; d = Math.atan2(Math.sin(d), Math.cos(d)); L.face += d * Math.min(1, dt * (L.moving ? 7 : 1.6));
     const prevP = 1 - L.hop; L.hop = Math.max(0, L.hop - dt * 1.3); const hp = L.hop > 0 ? 1 - L.hop : 0;
     L.shake = Math.max(0, L.shake - dt);
     L.blink -= dt; if (L.blink < -3.2 - Math.random() * 2) L.blink = 0.12;
     // hop: anticipation squash -> airborne (bigger, stretched, legs show) -> landing squash + puff
-    let air = 0, su = 1, sv = 1, s = 1 + Math.sin(t * 2.2) * 0.012;
+    let air = 0, su = 1, sv = 1, s = 1 + Math.sin(t * 2.2) * 0.012 + Math.abs(Math.sin(L.walkPh)) * 0.055 * L.gait;
     if (hp > 0 && hp < 0.18) { const q = hp / 0.18; s *= 1 - 0.07 * q; sv = 1 + 0.16 * q; su = 1 - 0.08 * q; }
     else if (hp >= 0.18 && hp < 0.78) { air = Math.sin((hp - 0.18) / 0.6 * Math.PI); s *= 1 + 0.28 * air; su = 1 + 0.15 * air; sv = 1 - 0.08 * air; }
     else if (hp >= 0.78) { const q = (hp - 0.78) / 0.22, b = Math.sin(q * Math.PI) * (1 - q * 0.3); sv = 1 + 0.17 * b; su = 1 - 0.1 * b; s *= 1 - 0.06 * b; }
@@ -719,14 +809,15 @@ void main(){
       const a = i / 16 * 6.283 + Math.random() * 0.3, sp = r * (1.6 + Math.random() * 1.6);
       S.puffs.push({ x: L.x + Math.cos(a) * r * 0.9, y: L.y + Math.sin(a) * r * 0.75, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, a, s: r * (0.06 + Math.random() * 0.05), life: 0.55, c: ['#8cc66e', '#5aa45a', '#f8bdd0', '#c2e39a'][i % 4] });
     }
-    const hb = hp > 0 ? -Math.sin(hp * 6.283) * 0.07 : 0;      // head bob
+    const hb = (hp > 0 ? -Math.sin(hp * 6.283) * 0.07 : 0) + Math.sin(L.walkPh * 2) * 0.07 * L.gait;      // head bob (hop + trot nod)
     // body sway in wind: clear downwind offset + rocking of several degrees
     const rock = Math.sin(L.rockPh) * 0.5 + 0.5;
-    const bx = L.x + pnx * pm * r * (0.14 + 0.2 * rock), by = L.y + pny * pm * r * (0.14 + 0.2 * rock);
-    const face = L.face + Math.sin(L.shake * 30) * L.shake * 0.25 + Math.sin(L.rockPh) * pm * 0.15;
+    const wsw = Math.sin(L.walkPh) * 0.06 * r * L.gait, fcx = Math.cos(L.face), fcy = Math.sin(L.face);   // side-to-side trot sway
+    const bx = L.x + pnx * pm * r * (0.14 + 0.2 * rock) - fcy * wsw, by = L.y + pny * pm * r * (0.14 + 0.2 * rock) + fcx * wsw;
+    const face = L.face + Math.sin(L.shake * 30) * L.shake * 0.25 + Math.sin(L.rockPh) * pm * 0.15 + Math.sin(L.walkPh) * 0.06 * L.gait;
     const ca = Math.cos(face), sa = Math.sin(face);
     const P = (u, v, k = 1) => [bx + (u * ca - v * sa) * r * k, by + (u * sa + v * ca) * r * k];
-    L.bx = bx; L.by = by; L.drawFace = face;
+    L.bx = bx; L.by = by; L.drawFace = face; L.drawS = s * Math.max(su, sv);
 
     // soft shadow (offset grows + shrinks while airborne)
     const so = r * (0.2 + air * 0.6), sr = r * 1.4 * (1 - air * 0.22);
@@ -739,7 +830,22 @@ void main(){
     g.save(); g.translate(bx, by);
     g.rotate(wa); g.scale(1 + dA, 1 - dP); g.rotate(-wa);
     g.rotate(face); g.scale(su, sv); g.rotate(-face);
+    { const sp = Math.hypot(L.vx, L.vy), st = Math.min(1, sp / (L.r0 * 9)); if (st > 0.01) { const va = Math.atan2(L.vy, L.vx); g.rotate(va); g.scale(1 + 0.09 * st, 1 - 0.05 * st); g.rotate(-va); } }
     g.translate(-bx, -by);
+    // trotting legs: diagonal pairs swing fore/aft, hooves peek out under the fleece
+    const ga = L.gait * (1 - Math.min(1, air * 2));
+    if (ga > 0.04) {
+      g.globalAlpha = Math.min(1, ga * 2.2); g.lineCap = 'round';
+      for (const [lu, lv] of [[0.55, 0.6], [0.55, -0.6], [-0.55, 0.62], [-0.55, -0.62]]) {
+        const pair = (lu > 0) === (lv > 0) ? 0 : Math.PI, sw = Math.sin(L.walkPh + pair), lift = Math.max(0, Math.cos(L.walkPh + pair));
+        // swinging leg reaches out past the fleece; planted leg tucks back under it
+        const [x0, y0] = P(lu * 0.75, lv * 0.75, s), [x1, y1] = P(lu * 1.0 + sw * 0.6 * ga, lv * (1.5 + 0.3 * lift * ga), s);
+        g.strokeStyle = '#a8957a'; g.lineWidth = r * 0.24; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+        g.strokeStyle = '#efe2cb'; g.lineWidth = r * 0.17; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+        g.fillStyle = lift > 0.2 ? '#6e5a4c' : '#4e3f36'; g.beginPath(); g.arc(x1, y1, r * (0.14 + 0.04 * lift), 0, 6.283); g.fill();
+      }
+      g.globalAlpha = 1;
+    }
     // little legs/hooves peek out while airborne
     if (air > 0.05) {
       g.globalAlpha = Math.min(1, air * 1.8);
@@ -857,10 +963,11 @@ void main(){
     else drawGrass(g, t, 0, 2);
     drawFlowers(g, t);
     drawLanded(g, dt);
+    moveLamb(dt, t);
     const lvl = drawLamb(g, dt, t);
     // Mask: front blades may only overlap a thin crescent at the lamb's lower edge, never its back/head.
     const Lm = S.lamb; g.save();
-    for (const [cx, cy, rx, ry] of [[Lm.bx, Lm.by - Lm.r * 0.18, Lm.r * 1.2, Lm.r * 0.95], [Lm.hx, Lm.hy - Lm.r * 0.1, Lm.hr * 1.9, Lm.hr * 1.9]]) {
+    for (const [cx, cy, rx, ry] of [[Lm.bx, Lm.by - Lm.r * 0.18, Lm.r * 1.2 * (Lm.drawS || 1), Lm.r * 0.95 * (Lm.drawS || 1)], [Lm.hx, Lm.hy - Lm.r * 0.1, Lm.hr * 1.9, Lm.hr * 1.9]]) {
       g.beginPath(); g.rect(-50, -50, S.w + 100, S.h + 100); g.ellipse(cx, cy, rx, ry, Lm.drawFace, 0, 6.283); g.clip('evenodd');
     }
     drawGrass(g, t, 3, 4, useGL); g.restore(); // GL path: only re-draw front blades around the lamb so it sits in the grass
@@ -869,6 +976,20 @@ void main(){
     return lvl;
   }
 
+  const hitLamb = (x, y) => Math.hypot(x - S.lamb.x, y - S.lamb.y) < S.lamb.r * 1.5;
+  function hop() { const L = S.lamb; L.hop = 1; L.shake = 0.6; }
+  function grab(x, y) { const L = S.lamb; L.mode = 'drag'; L.gx = L.x - x; L.gy = L.y - y; L.tx = x; L.ty = y; }
+  function dragTo(x, y) { const L = S.lamb; if (L.mode === 'drag') { L.tx = x; L.ty = y; } }
+  function release() {
+    const L = S.lamb; if (L.mode !== 'drag') return;
+    const sp = Math.hypot(L.vx, L.vy), cap = L.r0 * 14;               // small glide on release
+    if (sp > cap) { L.vx *= cap / sp; L.vy *= cap / sp; }
+    L.mode = 'glide';
+  }
+  function walkTo(x, y) {
+    const L = S.lamb; if (L.mode === 'drag') return;
+    [L.tx, L.ty] = clampPt(x, y); L.mode = 'walk';
+  }
   function tapLamb(x, y) {
     const L = S.lamb;
     if (Math.hypot(x - L.x, y - L.y) < L.r * 1.5) { L.hop = 1; L.shake = 0.6; return true; }
@@ -876,7 +997,7 @@ void main(){
     return false;
   }
 
-  window.Scene = { buildAtlas, GRASS, build, draw, tapLamb, state: S };
+  window.Scene = { buildAtlas, GRASS, build, draw, tapLamb, hitLamb, hop, grab, dragTo, release, walkTo, state: S };
 })();
 
 </script>
@@ -906,20 +1027,46 @@ void main(){
   gustBtn.addEventListener('click', () => { unlock(); Wind.gustHold = 0.9; gustBtn.classList.add('on'); setTimeout(() => gustBtn.classList.remove('on'), 900); });
   sndBtn.addEventListener('click', () => { unlock(); WindAudio.setOn(!WindAudio.on); sndBtn.classList.toggle('muted', !WindAudio.on); });
 
-  // pointer: tap = ring gust from the point (lamb hops if tapped); drag = gust along the stroke
-  let last = null;
+  // pointer:
+  //  - on the lamb: quick tap = hop + baa; press and move (>8px) = drag it across the grass (glides a little on release)
+  //  - on the grass: tap = ring gust + the lamb trots over there; swipe = gust along the stroke + the lamb trots to where you let go
+  let ptr = null;
+  const pt = e => [e.clientX, e.clientY];
   cv.addEventListener('pointerdown', e => {
-    unlock(); last = { x: e.clientX, y: e.clientY, t: performance.now() };
-    if (Scene.tapLamb(e.clientX, e.clientY)) WindAudio.baa(t); else {
-      for (let i = 0; i < 6; i++) { const a = i / 6 * 6.283; Wind.poke(e.clientX, e.clientY, Math.cos(a), Math.sin(a), 0.5); }
+    if (ptr) return;                                   // ignore extra fingers
+    unlock(); e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    const [x, y] = pt(e), onLamb = Scene.hitLamb(x, y);
+    ptr = { id: e.pointerId, x0: x, y0: y, lx: x, ly: y, t0: performance.now(), onLamb, drag: false, moved: false };
+    if (!onLamb) {
+      Scene.tapLamb(x, y);                              // lamb glances toward the touch
+      for (let i = 0; i < 6; i++) { const a = i / 6 * 6.283; Wind.poke(x, y, Math.cos(a), Math.sin(a), 0.5); }
     }
   });
   cv.addEventListener('pointermove', e => {
-    if (!last) return;
-    const dx = e.clientX - last.x, dy = e.clientY - last.y;
-    if (dx * dx + dy * dy > 400) { Wind.poke(e.clientX, e.clientY, dx, dy, 0.9); last = { x: e.clientX, y: e.clientY }; }
+    if (!ptr || e.pointerId !== ptr.id) return;
+    const [x, y] = pt(e);
+    if (!ptr.moved && Math.hypot(x - ptr.x0, y - ptr.y0) > 8) {
+      ptr.moved = true;
+      if (ptr.onLamb) { ptr.drag = true; Scene.grab(ptr.x0, ptr.y0); }
+    }
+    if (ptr.drag) { Scene.dragTo(x, y); return; }
+    const dx = x - ptr.lx, dy = y - ptr.ly;
+    if (dx * dx + dy * dy > 400) { Wind.poke(x, y, dx, dy, 0.9); ptr.lx = x; ptr.ly = y; }
   });
-  addEventListener('pointerup', () => last = null);
+  function end(e, cancel) {
+    if (!ptr || e.pointerId !== ptr.id) return;
+    const [x, y] = pt(e);
+    if (ptr.drag) Scene.release();
+    else if (!cancel) {
+      if (ptr.onLamb) { if (performance.now() - ptr.t0 < 600) { Scene.hop(); WindAudio.baa(t); } }
+      else Scene.walkTo(x, y);
+    }
+    ptr = null;
+  }
+  cv.addEventListener('pointerup', e => end(e, false));
+  cv.addEventListener('pointercancel', e => end(e, true));
+  cv.addEventListener('lostpointercapture', e => { if (ptr && e.pointerId === ptr.id) { if (ptr.drag) Scene.release(); ptr = null; } });
 
   // adaptive quality: every ~1.5s, nudge the drawn blade fraction toward ~55fps
   let acc = 0, frames = 0;
