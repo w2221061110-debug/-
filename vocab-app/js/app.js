@@ -3,7 +3,7 @@ import { mem, getKV, setKV } from './store.js';
 import { parseText } from './parse.js';
 import { translate, loadDict, lookupLocal, shortCn } from './dict.js';
 import { speak, stop, englishVoices } from './speak.js';
-import { review, isDue, isNew, preview, fmtDur, newSrs } from './srs.js';
+import { review, isDue, isNew, preview, fmtDur, newSrs, dayStart, localDate, queueCounts } from './srs.js';
 import * as sync from './sync.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -27,8 +27,9 @@ const items = () => [...mem.items.values()];
 const pagesSorted = () => [...mem.pages.values()].sort((a, b) => b.created - a.created);
 function dueList(now = Date.now()) { return items().filter(i => isDue(i.srs, now)).sort((a, b) => a.srs.due - b.srs.due); }
 function newList() { return items().filter(i => isNew(i.srs)).sort((a, b) => a.created - b.created); }
-function newToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return items().filter(i => i.srs && i.srs.firstAt >= d.getTime()).length; }
-function queueCount() { return dueList().length + Math.min(newList().length, Math.max(0, getKV('newPerDay', 20) - newToday())); }
+function newToday() { const t = dayStart(); return items().filter(i => i.srs && i.srs.firstAt >= t).length; }
+export function reviewCounts() { return queueCounts(items(), getKV('newPerDay', 20)); }
+function queueCount() { return reviewCounts().total; }
 function updateBadge() { const n = queueCount(); const b = $('#badge'); b.hidden = !n; b.textContent = n > 99 ? '99+' : n; try { n ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.(); } catch {} }
 function level(i) { const s = i.srs; if (!s || !s.reps) return 0; return s.interval >= 21 ? 3 : s.interval >= 4 ? 2 : 1; }
 
@@ -153,10 +154,10 @@ VIEWS.page = (id) => {
   if (p.mode === 'list') {
     view.innerHTML = head + `<div class="toolbar"><button class="btn pri" id="pall">▶ 全部朗读</button><button class="btn" id="hcn">${getKV('hideCn') ? '显示中文' : '遮住中文'}</button><button class="btn" id="edit">修改文字</button></div>
     <div class="units ${getKV('hideCn') ? 'hidecn' : ''}" id="units">${p.units.map((u, k) => { const it = mem.items.get(u.text.toLowerCase()); return `<button class="unit" data-k="${k}"><span class="num">${esc(u.num || k + 1)}</span><span class="body"><div class="en">${esc(u.text)}</div><div class="cn" data-cn="${esc(u.text.toLowerCase())}">${esc(shortCn(it?.cn) || '…')}</div></span><span class="spk">${ICON.spk}</span></button>`; }).join('')}</div>
-    <p class="hint">点一下就读整条；再点一次看详细释义。</p>`;
+    <p class="hint">点一下：整条朗读 + 显示释义；释义打开时可以直接点别的条目。</p>`;
     const els = [...view.querySelectorAll('.unit')];
     const play = async (k) => { els.forEach(e => e.classList.remove('playing')); els[k].classList.add('playing'); await speak(p.units[k].text); els[k]?.classList.remove('playing'); };
-    els.forEach(el => el.onclick = () => { const k = +el.dataset.k; playAllToken++; if (el.classList.contains('open')) openWord(p.units[k].text, p.units[k]); el.classList.add('open'); play(k); });
+    els.forEach(el => el.onclick = () => { const k = +el.dataset.k; playAllToken++; el.classList.add('open'); play(k); openWord(p.units[k].text, { speak: false }); });
     $('#pall').onclick = async () => { const tok = ++playAllToken; for (let k = 0; k < els.length && tok === playAllToken && route.arg === id; k++) { els[k].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); await play(k); await new Promise(r => setTimeout(r, 450)); } };
     $('#hcn').onclick = () => { setKV('hideCn', !getKV('hideCn')); go('page', id, false); };
     $('#edit').onclick = () => editPage(p);
@@ -179,18 +180,27 @@ function proseSelect(root) {
   const ws = [...root.querySelectorAll('.w')]; let timer, start = -1, end = -1, selecting = false, moved = false, sx = 0, sy = 0;
   const mark = () => { const [a, b] = [Math.min(start, end), Math.max(start, end)]; ws.forEach((w, i) => w.classList.toggle('sel', i >= a && i <= b)); };
   const clear = () => ws.forEach(w => w.classList.remove('sel'));
+  // 手指常落在词间空格或小词（of/to）边缘：吸附到同一行（上下容差 24px）里中心最近的词
+  const nearest = (x, y) => {
+    // 同一行里按“到词中心的水平距离”选：手指压到下一个词的边缘（如越过 of 落在 every 的开头）仍算 of
+    let best = -1, bd = 1e9;
+    for (const w of ws) { const r = w.getBoundingClientRect(); const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0; if (dy > 24) continue; const dx = Math.abs(x - (r.left + r.right) / 2); const d = dx + dy * 6; if (d < bd) { bd = d; best = +w.dataset.i; } }
+    return bd <= 90 ? best : -1;
+  };
+  window.__nearest = nearest;
   root.addEventListener('pointerdown', e => {
     const w = e.target.closest('.w'); if (!w || !e.isPrimary) return; root.setPointerCapture(e.pointerId); start = end = +w.dataset.i; moved = false; sx = e.clientX; sy = e.clientY;
     timer = setTimeout(() => { selecting = true; mark(); navigator.vibrate?.(10); }, 380);
   });
   root.addEventListener('pointermove', e => {
     if (!selecting) { if (Math.hypot(e.clientX - sx, e.clientY - sy) > 10) { clearTimeout(timer); moved = true; } return; }
-    e.preventDefault(); const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.w'); if (el && root.contains(el)) { end = +el.dataset.i; mark(); }
+    e.preventDefault(); const i = nearest(e.clientX, e.clientY); if (i >= 0) { end = i; mark(); }
   });
   root.addEventListener('contextmenu', e => e.preventDefault());
   root.addEventListener('touchmove', e => { if (selecting) e.preventDefault(); }, { passive: false });
-  const up = () => {
+  const up = (e) => {
     clearTimeout(timer); if (start < 0) return;
+    if (selecting && e && e.clientX != null) { const i = nearest(e.clientX, e.clientY); if (i >= 0) end = i; }
     if (selecting) { const [a, b] = [Math.min(start, end), Math.max(start, end)]; const phrase = ws.slice(a, b + 1).map(w => w.textContent).join(' '); selecting = false; speak(phrase); openWord(phrase); setTimeout(clear, 600); }
     else if (!moved) { const t = ws[start].textContent; ws[start].classList.add('sel'); speak(t); openWord(t); setTimeout(clear, 400); }
     start = -1;
@@ -199,18 +209,18 @@ function proseSelect(root) {
 }
 
 // ---------- 单词详情 ----------
-async function openWord(text, unit) {
+async function openWord(text, opts = {}) {
   const id = text.toLowerCase(); let it = mem.items.get(id);
   openSheet(`<div class="grab"></div><div class="word-big">${esc(text)}</div><div class="phon" id="wph">${it?.phon ? '/' + esc(it.phon) + '/' : ''}</div>
     <div class="playrow"><button class="btn pri" id="wp">${ICON.spk} 发音</button><button class="btn" id="ws">🐢 慢速</button></div>
     <div class="cn-big" id="wcn">${esc(it?.cn || '查询中…')}</div><div class="src" id="wsrc"></div>
-    <div class="playrow"><button class="btn ${it ? 'danger' : ''}" id="wsave">${it ? '从生词本移除' : '＋ 加入生词本'}</button><button class="btn" id="wclose">关闭</button></div>`);
+    <div class="playrow"><button class="btn ${it ? 'danger' : ''}" id="wsave">${it ? '从生词本移除' : '＋ 加入生词本'}</button><button class="btn" id="wclose">关闭</button></div>`, { modal: false });
   $('#wp').onclick = () => speak(text); $('#ws').onclick = () => speak(text, { slow: true }); $('#wclose').onclick = closeSheet;
   const rp = translate(text);
   $('#wsave').onclick = async () => { const r = await rp; return saveToggle(r); };
   const r = await rp;
   if (!$('#wcn')) return;
-  $('#wcn').textContent = r.cn; $('#wph').textContent = r.phon ? `/${r.phon}/` : ''; $('#wsrc').textContent = (r.source ? '来源：' + r.source : '') + (r.base && r.base !== id ? ` · 原形 ${r.base}` : '');
+  $('#wcn').textContent = r.cn; $('#wph').textContent = r.phon ? `/${r.phon}/` : ''; $('#wph').hidden = !r.phon; $('#wsrc').textContent = (r.source ? '来源：' + r.source : '') + (r.base && r.base !== id ? ` · 原形 ${r.base}` : '');
   async function saveToggle(r) {
     it = mem.items.get(id);
     if (it) { await store.del('items', id); toast('已移除'); }
@@ -220,8 +230,10 @@ async function openWord(text, unit) {
   };
 }
 let sheetAt = 0;
-function openSheet(html) { $('#sheet').innerHTML = html; $('#sheetWrap').hidden = false; sheetAt = Date.now(); }
-function closeSheet() { $('#sheetWrap').hidden = true; $('#sheet').innerHTML = ''; }
+function openSheet(html, { modal = true } = {}) { $('#sheet').innerHTML = html; const w = $('#sheetWrap'); w.hidden = false; w.classList.toggle('nonmodal', !modal); document.body.classList.toggle('sheet-open', !modal); sheetAt = Date.now(); }
+// 非模态释义面板：点页面其他空白处关闭；点别的单词/条目则直接切换内容
+document.addEventListener('pointerdown', e => { const w = $('#sheetWrap'); if (w.hidden || !w.classList.contains('nonmodal')) return; if (e.target.closest('#sheet, .unit, .prose .w, .wi, .tabs')) return; if (Date.now() - sheetAt > 300) closeSheet(); }, true);
+function closeSheet() { $('#sheetWrap').hidden = true; $('#sheet').innerHTML = ''; document.body.classList.remove('sheet-open'); }
 // 触屏点按后浏览器会再补发一次 click，落在刚弹出的遮罩上；500ms 内忽略，避免弹层一闪就关
 $('#sheetWrap').onclick = e => { if (e.target.id === 'sheetWrap' && Date.now() - sheetAt > 500) closeSheet(); };
 addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
@@ -243,7 +255,7 @@ function renderBook() {
   const list = items().filter(f).filter(i => !q || i.id.includes(q) || (i.cn || '').includes(q));
   if (!list.length) { $('#bl').innerHTML = `<div class="empty"><div class="e">📖</div>${mem.items.size ? '没有符合的单词' : '导入的单词会自动出现在这里'}</div>`; return; }
   const groups = new Map();
-  for (const i of list.sort((a, b) => a.created - b.created)) { const g = i.page || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(i); }
+  for (const i of list.sort((a, b) => a.created - b.created)) { const gs = [...new Set([...(i.pages || []), i.page].filter(g => g && mem.pages.has(g)))]; for (const g of gs.length ? gs : ['']) { if (!groups.has(g)) groups.set(g, []); groups.get(g).push(i); } }
   $('#bl').innerHTML = [...groups].sort((a, b) => (mem.pages.get(b[0])?.created || 0) - (mem.pages.get(a[0])?.created || 0)).map(([g, arr]) => { const p = mem.pages.get(g); return `<div class="group"><div class="ghead">${p?.thumb ? `<img src="${esc(p.thumb)}" alt="">` : ''}<b>${esc(p?.title || '单独添加')}</b><small>${arr.length}</small>${p ? `<button class="btn sm" data-pg="${esc(g)}">打开</button>` : ''}</div><div class="wl">${arr.map(i => `<button class="wi" data-id="${esc(i.id)}"><i class="lvl l${level(i)}"></i><span class="body"><div class="en">${esc(i.text)}</div><div class="cn" data-cn="${esc(i.id)}">${esc(shortCn(i.cn))}</div></span><span class="spk icon" style="color:var(--acc)">${ICON.spk}</span></button>`).join('')}</div></div>`; }).join('');
   $('#bl').querySelectorAll('.wi').forEach(b => b.onclick = () => { const it = mem.items.get(b.dataset.id); speak(it.text); openWord(it.text); });
   $('#bl').querySelectorAll('[data-pg]').forEach(b => b.onclick = () => go('page', b.dataset.pg));
@@ -253,7 +265,7 @@ function renderBook() {
 const MODES = { en: ['英 → 中', '看英文，想中文'], cn: ['中 → 英', '看中文，想英文'], listen: ['听音选义', '听发音，四选一'], spell: ['听写', '听发音，拼出来'] };
 VIEWS.review = () => {
   setTitle('复习');
-  const due = dueList().length, nw = Math.min(newList().length, Math.max(0, getKV('newPerDay', 20) - newToday()));
+  const { due, nw } = reviewCounts();
   const mode = getKV('mode', 'en');
   view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新词</small></div><div><b>${items().filter(i => level(i) === 3).length}</b><small>已掌握</small></div></div>
   <div class="sec">练习方式</div><div class="modes">${Object.entries(MODES).map(([k, [a, b]]) => `<button class="mode ${k === mode ? 'on' : ''}" data-m="${k}"><b>${a}</b><small>${b}</small></button>`).join('')}</div>
@@ -343,15 +355,23 @@ VIEWS.settings = () => {
   $('#test').onclick = () => speak('government leakage');
   $('#exp').onclick = exportFile; $('#imp').onclick = () => $('#fileJson').click();
   $('#qr').onclick = showQR; $('#scan').onclick = scanQR; $('#gist').onclick = gistUI;
-  $('#clr').onclick = async () => { if (confirm('确定清空？建议先导出备份。') && confirm('真的清空吗？无法恢复。')) { await store.clearAll(); toast('已清空'); go('home'); } };
+  $('#clr').onclick = confirmClear;
 };
+function confirmClear() {
+  openSheet(`<div class="grab"></div><b style="font-size:20px;color:var(--bad)">清空所有数据？</b><p class="hint">会删除这台设备上的 ${mem.items.size} 个词、${mem.pages.size} 页和复习进度，无法恢复。建议先「导出」备份。</p>
+    <p class="hint">请输入 <b>清空</b> 两个字确认：</p><input class="search" id="cfm" autocomplete="off" placeholder="清空">
+    <div class="playrow"><button class="btn" id="cfx">取消</button><button class="btn danger" id="cfy" disabled style="opacity:.5">永久清空</button></div>`);
+  $('#cfm').oninput = e => { const okk = e.target.value.trim() === '清空'; $('#cfy').disabled = !okk; $('#cfy').style.opacity = okk ? 1 : .5; };
+  $('#cfx').onclick = closeSheet;
+  $('#cfy').onclick = async () => { await store.clearAll(); closeSheet(); toast('已清空'); go('home'); };
+}
 async function exportFile() {
   const blob = new Blob([JSON.stringify(sync.snapshot())], { type: 'application/json' });
-  const name = `拾词备份-${new Date().toISOString().slice(0, 10)}.json`; const file = new File([blob], name, { type: 'application/json' });
+  const name = `拾词备份-${localDate()}.json`; const file = new File([blob], name, { type: 'application/json' });
   if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: '拾词备份' }); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); toast('已导出');
 }
-$('#fileJson').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { const r = await sync.merge(JSON.parse(await f.text())); toast(`合并完成：新增 ${r.added}，更新 ${r.updated}`); go(route.name === 'settings' ? 'settings' : 'home', null, false); } catch (err) { toast('导入失败：' + err.message); } };
+$('#fileJson').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { const r = await sync.merge(JSON.parse(await f.text())); toast(sync.summary(r, '导入完成')); go(route.name === 'settings' ? 'settings' : 'home', null, false); } catch (err) { toast('导入失败：' + err.message); } };
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
 async function showQR() {
   try { if (!window.qrcode) await loadScript('vendor/qrcode.min.js').catch(() => loadScript('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js')); } catch { return toast('二维码组件加载失败，请用文件导出'); }
@@ -365,7 +385,7 @@ async function scanQR() {
   try { if (!window.jsQR) await loadScript('vendor/jsQR.min.js').catch(() => loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js')); } catch { return toast('扫码组件加载失败'); }
   openSheet(`<div class="grab"></div><b>对准另一台设备上的二维码</b><video class="scan" id="vid" playsinline muted></video><div class="playrow"><button class="btn" id="qimg">从照片识别</button><button class="btn" id="qc">取消</button></div>`);
   let stream, alive = true; const c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
-  const done = async (txt) => { alive = false; stream?.getTracks().forEach(t => t.stop()); closeSheet(); try { const r = await sync.merge(sync.expand(await sync.fromB64(txt.replace(/^VOCAB1:/, '')))); toast(`同步完成：新增 ${r.added}，更新 ${r.updated}`); go('settings', null, false); } catch (e) { toast('二维码无效'); } };
+  const done = async (txt) => { alive = false; stream?.getTracks().forEach(t => t.stop()); closeSheet(); try { const r = await sync.merge(sync.expand(await sync.fromB64(txt.replace(/^VOCAB1:/, '')))); toast(sync.summary(r, '同步完成')); go('settings', null, false); } catch (e) { toast('二维码无效'); } };
   const tryImg = (src, w, h) => { c.width = w; c.height = h; g.drawImage(src, 0, 0, w, h); const r = jsQR(g.getImageData(0, 0, w, h).data, w, h); if (r && r.data.startsWith('VOCAB1:')) { done(r.data); return true; } };
   $('#qc').onclick = () => { alive = false; stream?.getTracks().forEach(t => t.stop()); closeSheet(); };
   $('#qimg').onclick = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.onchange = async () => { const b = await createImageBitmap(inp.files[0]); const s = Math.min(1, 1200 / Math.max(b.width, b.height)); if (!tryImg(b, b.width * s | 0, b.height * s | 0)) toast('照片里没找到二维码'); }; inp.click(); };
@@ -382,20 +402,22 @@ function gistUI() {
   $('#gs').onclick = async () => {
     const t = $('#gt').value.trim(); let id = $('#gi').value.trim(); if (!t) return toast('请先填 token');
     await setKV('gistToken', t); $('#gs').textContent = '同步中…';
-    try { let r = { added: 0, updated: 0 }; if (id) r = await sync.gistPull(t, id); id = await sync.gistPush(t, id); await setKV('gistId', id); await setKV('gistAt', Date.now()); closeSheet(); toast(`已同步（新增 ${r.added}，更新 ${r.updated}）`); go('settings', null, false); }
+    try { let r = { added: 0, updated: 0 }; if (id) r = await sync.gistPull(t, id); id = await sync.gistPush(t, id); await setKV('gistId', id); await setKV('gistAt', Date.now()); closeSheet(); toast(sync.summary(r, '已同步')); go('settings', null, false); }
     catch (e) { $('#gs').textContent = '同步'; toast(e.message + '，请检查 token / 网络'); }
   };
 }
 async function autoGist() { const t = getKV('gistToken'), id = getKV('gistId'); if (!t || !id || !navigator.onLine) return; try { await sync.gistPull(t, id); await sync.gistPush(t, id); updateBadge(); } catch {} }
 
 // ---------- 启动 ----------
+let badgeT; window.addEventListener('vocab-changed', () => { clearTimeout(badgeT); badgeT = setTimeout(updateBadge, 150); });
+setInterval(updateBadge, 60000);
 window.addEventListener('vocab-storage-error', () => toast(store.storageWarning));
 (async () => {
   await store.init(); applyTheme();
   if (store.storageWarning) toast(store.storageWarning);
   history.replaceState({ name: 'home' }, ''); go('home', null, false);
   loadDict().catch(() => {});
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   autoGist(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { updateBadge(); autoGist(); } });
   window.__app = { store, mem, parseText, translate, speak, review, sync, go, importText };
 })();

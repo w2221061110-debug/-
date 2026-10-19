@@ -11,16 +11,32 @@ export function snapshot({ thumbs = true } = {}) {
 /** 合并：同 id 以 updated 新者为准；复习记录取复习次数多/更晚的 */
 export async function merge(data) {
   if (!data || data.app !== 'vocab-app') throw new Error('不是本应用的备份文件');
-  let added = 0, updated = 0;
-  for (const store of ['pages', 'items', 'kv']) for (const r of data[store] || []) {
+  const res = { items: { added: 0, updated: 0 }, pages: { added: 0, updated: 0 }, kv: { added: 0, updated: 0 } };
+  for (const store of ['pages', 'items', 'kv']) for (const r0 of data[store] || []) {
+    const r = r0 && typeof r0 === 'object' ? { ...r0 } : r0;
     if (!r || typeof r.id !== 'string' || (store === 'kv' && r.id === 'gistToken')) continue;
     if (store === 'items' && typeof r.text !== 'string') continue;
     if (store === 'pages' && (!Array.isArray(r.units) || r.units.some(u => !u || typeof u.text !== 'string'))) continue;
+    if (store === 'items') r.pages = [...new Set([...(r.pages || []), r.page].filter(Boolean))];
     const cur = mem[store].get(r.id);
-    if (!cur) { await put(store, r); added++; }
-    else if ((r.updated || 0) > (cur.updated || 0)) { if (store === 'pages' && !r.thumb) r.thumb = cur.thumb; await put(store, r); updated++; }
+    if (!cur) { await put(store, r); res[store].added++; continue; }
+    if (store === 'items') {
+      // 同一个词在两台设备都有：保留各自所属的页（导入的页单独成组），进度取较新的
+      const pages = [...new Set([...(cur.pages || []), cur.page, ...r.pages].filter(Boolean))];
+      const newer = (r.updated || 0) > (cur.updated || 0);
+      const rec = newer ? { ...r, page: cur.page || r.page } : { ...cur };
+      if (pages.length !== (cur.pages || []).length || newer) { rec.pages = pages; await put(store, rec); res.items.updated++; }
+      continue;
+    }
+    if ((r.updated || 0) > (cur.updated || 0)) { if (store === 'pages' && !r.thumb) r.thumb = cur.thumb; await put(store, r); res[store].updated++; }
   }
-  return { added, updated };
+  // 兼容旧调用
+  res.added = res.items.added; res.updated = res.items.updated;
+  return res;
+}
+export function summary(r, head = '导入完成') {
+  const w = r.items || r, p = r.pages || { added: 0, updated: 0 };
+  return `${head}：单词新增 ${w.added}、更新 ${w.updated}` + (p.added || p.updated ? `；页面新增 ${p.added}、更新 ${p.updated}` : '');
 }
 export async function toB64(obj) {
   const bytes = new TextEncoder().encode(JSON.stringify(obj));
@@ -38,7 +54,7 @@ export function compact() {
   return { app: 'vocab-app', v: 1, at: Date.now(), c: 1, items: [...mem.items.values()].map(i => [i.text, i.cn || '', i.srs ? [i.srs.reps, Math.round(i.srs.ease * 100), i.srs.interval, Math.round(i.srs.due / 60000), i.srs.lapses, i.srs.firstAt || 0, i.srs.last || 0] : 0, i.updated, i.page || '']) };
 }
 export function expand(c) {
-  return { app: 'vocab-app', v: 1, items: c.items.map(([text, cn, s, updated, page]) => ({ id: text.toLowerCase(), text, cn, page, updated, created: updated, srs: s ? { reps: s[0], ease: s[1] / 100, interval: s[2], due: s[3] * 60000, lapses: s[4], firstAt: s[5] || 0, last: s[6] || 0 } : null })) };
+  return { app: 'vocab-app', v: 1, items: c.items.map(([text, cn, s, updated, page]) => ({ id: text.toLowerCase(), text, cn, page, pages: page ? [page] : [], updated, created: updated, srs: s ? { reps: s[0], ease: s[1] / 100, interval: s[2], due: s[3] * 60000, lapses: s[4], firstAt: s[5] || 0, last: s[6] || 0 } : null })) };
 }
 // ---- Gist ----
 const API = 'https://api.github.com/gists';
