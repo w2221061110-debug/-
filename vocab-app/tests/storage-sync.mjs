@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+globalThis.window = new EventTarget();
+Object.defineProperty(globalThis, 'navigator', { value: { storage: { persist: async () => { throw Error('denied'); } } }, configurable: true });
+globalThis.indexedDB = { open() { throw Error('private mode'); } };
+const store = await import('../js/store.js');
+const sync = await import('../js/sync.js');
+await store.init(); assert.ok(store.storageWarning);
+await store.put('items', { id:'hello', text:'hello', updated:1, srs:{ reps:2, ease:2.5, interval:4, due:60000, lapses:1, firstAt:1234, last:5678 } });
+await store.setKV('gistToken','secret');
+assert.equal(sync.snapshot().kv.some(r=>r.id==='gistToken'),false);
+await sync.merge({app:'vocab-app',kv:[{id:'gistToken',v:'imported',updated:Date.now()+1}]});
+assert.equal(store.getKV('gistToken'),'secret');
+const restored = sync.expand(sync.compact()).items[0];
+assert.equal(restored.srs.firstAt,1234); assert.equal(restored.srs.last,5678);
+await sync.merge({app:'vocab-app',items:[{id:'hello',text:'older',updated:0}]});
+assert.equal(store.mem.items.get('hello').text,'hello');
+console.log('PASS storage fallback, token export/import protection, QR SRS timestamps, older merge');
