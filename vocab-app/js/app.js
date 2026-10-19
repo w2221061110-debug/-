@@ -206,10 +206,12 @@ async function openWord(text, unit) {
     <div class="cn-big" id="wcn">${esc(it?.cn || '查询中…')}</div><div class="src" id="wsrc"></div>
     <div class="playrow"><button class="btn ${it ? 'danger' : ''}" id="wsave">${it ? '从生词本移除' : '＋ 加入生词本'}</button><button class="btn" id="wclose">关闭</button></div>`);
   $('#wp').onclick = () => speak(text); $('#ws').onclick = () => speak(text, { slow: true }); $('#wclose').onclick = closeSheet;
-  const r = await translate(text);
+  const rp = translate(text);
+  $('#wsave').onclick = async () => { const r = await rp; return saveToggle(r); };
+  const r = await rp;
   if (!$('#wcn')) return;
   $('#wcn').textContent = r.cn; $('#wph').textContent = r.phon ? `/${r.phon}/` : ''; $('#wsrc').textContent = (r.source ? '来源：' + r.source : '') + (r.base && r.base !== id ? ` · 原形 ${r.base}` : '');
-  $('#wsave').onclick = async () => {
+  async function saveToggle(r) {
     it = mem.items.get(id);
     if (it) { await store.del('items', id); toast('已移除'); }
     else { const pid = route.name === 'page' ? route.arg : ''; await store.put('items', { id, text, cn: r.cn, phon: r.phon || '', page: pid, pages: pid ? [pid] : [], created: Date.now(), updated: Date.now(), srs: null }); toast('已加入生词本'); }
@@ -217,9 +219,11 @@ async function openWord(text, unit) {
     if (route.name === 'book') go('book', null, false);
   };
 }
-function openSheet(html) { $('#sheet').innerHTML = html; $('#sheetWrap').hidden = false; }
+let sheetAt = 0;
+function openSheet(html) { $('#sheet').innerHTML = html; $('#sheetWrap').hidden = false; sheetAt = Date.now(); }
 function closeSheet() { $('#sheetWrap').hidden = true; $('#sheet').innerHTML = ''; }
-$('#sheetWrap').onclick = e => { if (e.target.id === 'sheetWrap') closeSheet(); };
+// 触屏点按后浏览器会再补发一次 click，落在刚弹出的遮罩上；500ms 内忽略，避免弹层一闪就关
+$('#sheetWrap').onclick = e => { if (e.target.id === 'sheetWrap' && Date.now() - sheetAt > 500) closeSheet(); };
 addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 // ---------- 生词本 ----------

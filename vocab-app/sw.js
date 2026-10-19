@@ -1,6 +1,8 @@
-const V = 'shici-v3-reviewed';
+const V = 'shici-v4';
 const SHELL = ['./', 'index.html', 'style.css', 'manifest.json', 'icon.png', 'data/dict.txt', 'js/app.js', 'js/store.js', 'js/parse.js', 'js/dict.js', 'js/speak.js', 'js/srs.js', 'js/sync.js', 'js/ocr.js', 'vendor/tesseract.min.js', 'vendor/worker.min.js', 'vendor/tesseract-core-simd-lstm.wasm.js', 'vendor/tesseract-core-lstm.wasm.js', 'vendor/eng.traineddata.gz', 'vendor/qrcode.min.js', 'vendor/jsQR.min.js'];
-self.addEventListener('install', e => e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
+// 必需文件一次性预缓存；体积大的 OCR 引擎/模型（约 11MB）尽力缓存，失败不影响安装（国内网络抖动时不至于整个离线功能失效）
+const CORE = SHELL.filter(f => !/tesseract|worker\.min|traineddata/.test(f)), BIG = SHELL.filter(f => !CORE.includes(f));
+self.addEventListener('install', e => e.waitUntil(caches.open(V).then(c => c.addAll(CORE).then(() => { BIG.forEach(f => c.add(f).catch(() => {})); })).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('shici-') && k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url); if (e.request.method !== 'GET') return;

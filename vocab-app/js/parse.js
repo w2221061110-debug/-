@@ -41,7 +41,7 @@ export function parseText(raw) {
   const avgWords = lines.reduce((a, l) => a + tokenizeWords(l).length, 0) / lines.length;
   const lowerStarts = lines.slice(1).filter(l => /^[a-z]/.test(l)).length / Math.max(1, lines.length - 1);
   const proseLike = marked / lines.length < 0.5 && (avgWords > 5.5 || (lowerStarts > 0.4 && avgWords > 3.5));
-  const isList = marked / lines.length >= 0.5 || entries / lines.length >= 0.7;
+  const isList = marked / lines.length >= 0.5 || (!proseLike && entries / lines.length >= 0.7);
   if (isList) {
     const units = []; const seen = new Set();
     const strongNum = lines.filter(l => NUM.test(l)).length / lines.length >= 0.6;

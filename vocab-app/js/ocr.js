@@ -67,6 +67,8 @@ export async function recognize(file, onProgress) {
     const h = Math.max(8, l.bbox.y1 - l.bbox.y0); let seg = [ws[0]]; const segs = [seg];
     for (let k = 1; k < ws.length; k++) { if (ws[k].bbox.x0 - ws[k - 1].bbox.x1 > h * 1.6) segs.push(seg = []); seg.push(ws[k]); }
     const keep = segs.filter(sg => sg.reduce((a, w) => a + w.confidence, 0) / sg.length >= 62 && /[A-Za-z]{2}/.test(sg.map(w => w.text).join('')));
+    // 英文模型把中文释义认成的短尾巴（如 "tax revenue Big"）：隔开一大段距离、只有一个大写开头短词的段 → 去掉
+    for (let k = keep.length - 1; k > 0; k--) if (keep[k].length === 1 && /^[A-Z][A-Za-z]{0,3}$/.test(keep[k][0].text)) keep.splice(k, 1);
     if (keep.length) lines.push(keep.map(sg => sg.map(w => w.text).join(' ')).join(' ').trim());
   }
   return { text: lines.length ? lines.join('\n') : data.text, thumb: thumb(canvas), confidence: data.confidence };
