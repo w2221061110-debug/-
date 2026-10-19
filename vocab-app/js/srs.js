@@ -30,3 +30,16 @@ export function fmtDur(ms) {
   if (ms < DAY) return Math.round(ms / 3600000) + '小时';
   const d = Math.round(ms / DAY); return d < 30 ? d + '天' : d < 365 ? Math.round(d / 30) + '个月' : '1年';
 }
+
+/** 一天从凌晨 4 点开始 */
+export function dayStart(now = Date.now()) { const d = new Date(now); if (d.getHours() < 4) d.setDate(d.getDate() - 1); d.setHours(4, 0, 0, 0); return d.getTime(); }
+/** 本地日期 YYYY-MM-DD（不能用 toISOString，那是 UTC） */
+export function localDate(d = new Date()) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+/** 徽章 = 复习页「开始复习 N 个」= 到期复习 + 今天还能学的新词（新词上限扣掉今天已学的） */
+export function queueCounts(list, newPerDay = 20, now = Date.now()) {
+  const due = list.filter(i => isDue(i.srs, now)).length;
+  const fresh = list.filter(i => isNew(i.srs)).length;
+  const t = dayStart(now); const learned = list.filter(i => i.srs && i.srs.firstAt >= t).length;
+  const nw = Math.min(fresh, Math.max(0, newPerDay - learned));
+  return { due, nw, total: due + nw, learnedToday: learned };
+}

@@ -22,8 +22,9 @@ export async function init() {
   } catch { failed(); }
   try { await navigator.storage?.persist?.(); } catch {}
 }
-export function put(store, rec) { rec.updated = rec.updated || Date.now(); mem[store].set(rec.id, rec); return db ? tx(store, 'readwrite', s => s.put(rec)).catch(failed) : Promise.resolve(); }
-export function del(store, id) { mem[store].delete(id); return db ? tx(store, 'readwrite', s => s.delete(id)).catch(failed) : Promise.resolve(); }
+function changed() { try { window.dispatchEvent(new Event('vocab-changed')); } catch {} }
+export function put(store, rec) { changed(); rec.updated = rec.updated || Date.now(); mem[store].set(rec.id, rec); return db ? tx(store, 'readwrite', s => s.put(rec)).catch(failed) : Promise.resolve(); }
+export function del(store, id) { changed(); mem[store].delete(id); return db ? tx(store, 'readwrite', s => s.delete(id)).catch(failed) : Promise.resolve(); }
 export function getKV(k, d) { return mem.kv.has(k) ? mem.kv.get(k).v : d; }
 export function setKV(k, v) { return put('kv', { id: k, v, updated: Date.now() }); }
-export async function clearAll() { for (const s of ['pages', 'items', 'kv']) { mem[s].clear(); if (db) await tx(s, 'readwrite', st => st.clear()).catch(failed); } }
+export async function clearAll() { changed(); for (const s of ['pages', 'items', 'kv']) { mem[s].clear(); if (db) await tx(s, 'readwrite', st => st.clear()).catch(failed); } }

@@ -24,6 +24,10 @@ export function lookupLocal(text) {
   }
   return null;
 }
+/** 规范在线译文：去多余空格，英文标点→中文标点 */
+export function normCn(t) { return String(t || '').replace(/\s*([,，;；、])\s*/g, (m, c) => (c === ',' ? '，' : c === ';' ? '；' : c)).replace(/(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, '').replace(/^[，；\s]+|[，；\s]+$/g, '').trim(); }
+/** 短语没有整体音标时，用每个词的音标拼起来（缺任何一个就不显示） */
+export function phraseIpa(text) { const ws = text.toLowerCase().split(/\s+/); if (ws.length < 2) return ''; const ps = ws.map(w => lookupLocal(w.replace(/[^a-z'\-]/g, ''))?.phon || (/^(sb|sth)$/.test(w) ? w : '')); return ps.every(Boolean) ? ps.join(' ') : ''; }
 export function shortCn(cn) { return (cn || '').split('；').slice(0, 2).join('；').replace(/\s+/g, ' '); }
 function timeout(p, ms) { return Promise.race([p, new Promise((_, j) => setTimeout(() => j(new Error('timeout')), ms))]); }
 const sources = {
@@ -38,12 +42,12 @@ const sources = {
 export async function translate(text, { online = true } = {}) {
   await loadDict();
   const local = lookupLocal(text);
-  if (local) return { cn: local.cn, phon: local.phon, base: local.base, source: '离线词典' };
+  if (local) return { cn: local.cn, phon: local.phon || phraseIpa(text), base: local.base, source: '离线词典' };
   const cache = getKV('tr:' + text.toLowerCase());
-  if (cache) return cache;
+  if (cache) return { ...cache, cn: normCn(cache.cn), phon: cache.phon || phraseIpa(text) };
   if (online && navigator.onLine !== false) {
     for (const [name, fn] of Object.entries(sources)) {
-      try { const cn = await fn(text); const res = { cn, source: name === 'google' ? '谷歌翻译' : 'MyMemory' }; setKV('tr:' + text.toLowerCase(), res); return res; } catch {}
+      try { const cn = await fn(text); const res = { cn: normCn(cn), phon: phraseIpa(text), source: name === 'google' ? '谷歌翻译' : 'MyMemory' }; setKV('tr:' + text.toLowerCase(), res); return res; } catch {}
     }
   }
   // 逐词拼接兜底
