@@ -1,7 +1,7 @@
 import * as store from './store.js';
 import { mem, getKV, setKV } from './store.js';
 import { parseText } from './parse.js';
-import { translate, loadDict, lookupLocal, shortCn } from './dict.js';
+import { translate, loadDict, lookupLocal, shortCn, normCn, phraseIpa, DICT_VERSION } from './dict.js';
 import { speak, stop, englishVoices } from './speak.js';
 import { review, isDue, isNew, preview, fmtDur, newSrs, dayStart, localDate, queueCounts } from './srs.js';
 import * as sync from './sync.js';
@@ -13,7 +13,11 @@ const ICON = {
   spk: '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path class="w" d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   cam: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
 };
-let toastT; function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200); }
+let toastT; function toast(msg, action) {
+  const t = $('#toast'); t.textContent = msg; t.classList.toggle('act', !!action);
+  if (action) { const b = document.createElement('button'); b.className = 'toast-btn'; b.textContent = action.label; b.onclick = () => { t.classList.remove('show'); action.run(); }; t.append(' ', b); }
+  t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), action ? 6000 : 2200);
+}
 window.__toast = toast;
 window.addEventListener('vocab-speech-error', () => toast('发音未能播放，请点播放按钮重试，或在设置中切换系统语音。'));
 $('#toast').setAttribute('role', 'status');
@@ -45,6 +49,24 @@ async function saveUnits(units, pageId) {
   fillTranslations(units.map(u => u.text.toLowerCase()));
   return n;
 }
+/** 词典/翻译规则升级后：清掉在线翻译缓存，重新翻译已存单词（没有手动修改释义的功能，所以全部都是自动来的） */
+async function migrateDict() {
+  if (getKV('dictVer') === DICT_VERSION) return;
+  await loadDict();
+  for (const k of [...mem.kv.keys()]) if (String(k).startsWith('tr:')) await store.del('kv', k);
+  let n = 0;
+  for (const it of items()) {
+    if (it.userCn) continue;
+    const local = lookupLocal(it.text);
+    if (local) Object.assign(it, { cn: local.cn, phon: local.phon || phraseIpa(it.text), weak: false, src: '离线词典' });
+    else Object.assign(it, { cn: normCn(it.cn), phon: it.phon || phraseIpa(it.text), weak: true }); // 在线来的：先规范标点，下次显示时重新翻译
+    it.updated = Date.now(); await store.put('items', it); n++;
+  }
+  await setKV('dictVer', DICT_VERSION);
+  return n;
+}
+/** 导入的数据可能来自旧版本：重新清洗一遍 */
+async function remigrate() { await setKV('dictVer', 0); await migrateDict(); }
 async function fillTranslations(ids) {
   await loadDict();
   for (const id of ids) {
@@ -121,11 +143,21 @@ async function importImage(file) {
     view.innerHTML = `<div class="empty"><div class="e">📶</div>识别引擎下载失败，请检查网络后重试。<br><small>${esc(e.message)}</small><br><br><button class="btn" id="pt">改成粘贴文字</button></div>`; $('#pt').onclick = () => go('paste');
   }
 }
-async function createPage(parsed, raw, thumb, title, replace) {
+/** 同一张图/同一段文字的指纹：识别文字规范化后比较（同一图片 OCR 结果相同） */
+export function pageFingerprint(raw) { return String(raw || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ').trim(); }
+async function createPage(parsed, raw, thumb, title, replace, force) {
+  const fp = pageFingerprint(raw);
+  const dup = !force && fp && [...mem.pages.values()].find(p => (p.fp || pageFingerprint(p.raw)) === fp);
+  if (dup) {
+    if (replace) history.replaceState({ name: 'page', arg: dup.id }, '');
+    go('page', dup.id, !replace);
+    toast('这一页已经导入过', { label: '仍然新建', run: () => createPage(parsed, raw, thumb, title, false, true) });
+    return 0;
+  }
   const id = 'p' + Date.now().toString(36);
   const t = title || (parsed.units.slice(0, 2).map(u => u.text).join(' · ') + (parsed.units.length > 2 ? ' …' : ''));
   const saveList = parsed.mode === 'list' ? parsed.units : [];
-  await store.put('pages', { id, title: t.slice(0, 40), created: Date.now(), thumb: thumb || '', raw, mode: parsed.mode, text: parsed.text || '', units: parsed.units.map(u => ({ text: u.text, num: u.num || null })) });
+  await store.put('pages', { id, fp, title: t.slice(0, 40), created: Date.now(), thumb: thumb || '', raw, mode: parsed.mode, text: parsed.text || '', units: parsed.units.map(u => ({ text: u.text, num: u.num || null })) });
   const n = await saveUnits(saveList, id);
   if (replace) history.replaceState({ name: 'page', arg: id }, ''); 
   go('page', id, !replace);
@@ -187,9 +219,11 @@ function proseSelect(root) {
     for (const w of ws) { const r = w.getBoundingClientRect(); const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0; if (dy > 24) continue; const dx = Math.abs(x - (r.left + r.right) / 2); const d = dx + dy * 6; if (d < bd) { bd = d; best = +w.dataset.i; } }
     return bd <= 90 ? best : -1;
   };
+  const edgeWord = (x, y) => { let best = null, bd = 11; for (const w of ws) { const r = w.getBoundingClientRect(); if (y < r.top - 6 || y > r.bottom + 6) continue; const dx = x < r.left ? (r.left - x) * 0.6 : x > r.right ? x - r.right : 0; if (dx < bd) { bd = dx; best = w; } } return best; };
   window.__nearest = nearest;
   root.addEventListener('pointerdown', e => {
-    const w = e.target.closest('.w'); if (!w || !e.isPrimary) return; root.setPointerCapture(e.pointerId); start = end = +w.dataset.i; moved = false; sx = e.clientX; sy = e.clientY;
+    // 起点也放宽：按在词的最边缘或词间空隙（±10px 内）也算按到最近的词
+    if (!e.isPrimary) return; const w = e.target.closest('.w') || edgeWord(e.clientX, e.clientY); if (!w) return; root.setPointerCapture(e.pointerId); start = end = +w.dataset.i; moved = false; sx = e.clientX; sy = e.clientY;
     timer = setTimeout(() => { selecting = true; mark(); navigator.vibrate?.(10); }, 380);
   });
   root.addEventListener('pointermove', e => {
@@ -217,19 +251,21 @@ async function openWord(text, opts = {}) {
     <div class="playrow"><button class="btn ${it ? 'danger' : ''}" id="wsave">${it ? '从生词本移除' : '＋ 加入生词本'}</button><button class="btn" id="wclose">关闭</button></div>`, { modal: false });
   $('#wp').onclick = () => speak(text); $('#ws').onclick = () => speak(text, { slow: true }); $('#wclose').onclick = closeSheet;
   const rp = translate(text);
-  $('#wsave').onclick = async () => { const r = await rp; return saveToggle(r); };
+  $('#wsave').onclick = () => saveToggle(null); // 立即保存，不等在线翻译；释义随后补上
   const r = await rp;
   if (!$('#wcn')) return;
   $('#wcn').textContent = r.cn; $('#wph').textContent = r.phon ? `/${r.phon}/` : ''; $('#wph').hidden = !r.phon; $('#wsrc').textContent = (r.source ? '来源：' + r.source : '') + (r.base && r.base !== id ? ` · 原形 ${r.base}` : '');
   async function saveToggle(r) {
     it = mem.items.get(id);
     if (it) { await store.del('items', id); toast('已移除'); }
-    else { const pid = route.name === 'page' ? route.arg : ''; await store.put('items', { id, text, cn: r.cn, phon: r.phon || '', page: pid, pages: pid ? [pid] : [], created: Date.now(), updated: Date.now(), srs: null }); toast('已加入生词本'); }
+    else { const pid = route.name === 'page' ? route.arg : ''; await store.put('items', { id, text, cn: r?.cn || '', phon: r?.phon || '', weak: !r, page: pid, pages: pid ? [pid] : [], created: Date.now(), updated: Date.now(), srs: null }); toast('已加入生词本'); if (!r) rp.then(() => fillTranslations([id])); }
     closeSheet(); updateBadge(); document.querySelectorAll('.prose .w').forEach(w => w.classList.toggle('saved', mem.items.has(w.textContent.toLowerCase())));
     if (route.name === 'book') go('book', null, false);
   };
 }
 let sheetAt = 0;
+// 释义面板贴在底部导航栏上方：用真实导航栏高度，避免第一次打开时盖住导航
+const setTabsH = () => document.documentElement.style.setProperty('--tabs-h', $('#tabs').offsetHeight + 'px'); setTabsH(); addEventListener('resize', setTabsH);
 function openSheet(html, { modal = true } = {}) { $('#sheet').innerHTML = html; const w = $('#sheetWrap'); w.hidden = false; w.classList.toggle('nonmodal', !modal); document.body.classList.toggle('sheet-open', !modal); sheetAt = Date.now(); }
 // 非模态释义面板：点页面其他空白处关闭；点别的单词/条目则直接切换内容
 document.addEventListener('pointerdown', e => { const w = $('#sheetWrap'); if (w.hidden || !w.classList.contains('nonmodal')) return; if (e.target.closest('#sheet, .unit, .prose .w, .wi, .tabs')) return; if (Date.now() - sheetAt > 300) closeSheet(); }, true);
@@ -269,7 +305,7 @@ VIEWS.review = () => {
   const mode = getKV('mode', 'en');
   view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新词</small></div><div><b>${items().filter(i => level(i) === 3).length}</b><small>已掌握</small></div></div>
   <div class="sec">练习方式</div><div class="modes">${Object.entries(MODES).map(([k, [a, b]]) => `<button class="mode ${k === mode ? 'on' : ''}" data-m="${k}"><b>${a}</b><small>${b}</small></button>`).join('')}</div>
-  <div style="display:grid;gap:10px;margin-top:20px"><button class="btn pri" id="start" style="min-height:58px;font-size:18px" ${due + nw ? '' : 'disabled'}>${due + nw ? `开始复习 ${due + nw} 个` : '今天没有要复习的 🎉'}</button>
+  <div style="display:grid;gap:10px;margin-top:20px"><button class="btn pri" id="start" style="min-height:58px;font-size:18px" ${due + nw ? '' : 'disabled'}>${due + nw ? `开始复习 ${due + nw} 个（到期 ${due} · 新词 ${nw}）` : '今天没有要复习的 🎉'}</button>
   ${mem.items.size >= 1 ? `<button class="btn" id="extra">自由练习（随机 20 个）</button>` : ''}</div>
   <p class="hint">按艾宾浩斯遗忘曲线（SM-2 算法）安排：记得越牢，下次间隔越长；忘了的 10 分钟后再出现。</p>`;
   view.querySelectorAll('.mode').forEach(b => b.onclick = () => { setKV('mode', b.dataset.m); go('review', null, false); });
@@ -371,7 +407,7 @@ async function exportFile() {
   if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: '拾词备份' }); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); toast('已导出');
 }
-$('#fileJson').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { const r = await sync.merge(JSON.parse(await f.text())); toast(sync.summary(r, '导入完成')); go(route.name === 'settings' ? 'settings' : 'home', null, false); } catch (err) { toast('导入失败：' + err.message); } };
+$('#fileJson').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { const r = await sync.merge(JSON.parse(await f.text())); await remigrate(); toast(sync.summary(r, '导入完成')); go(route.name === 'settings' ? 'settings' : 'home', null, false); } catch (err) { toast('导入失败：' + err.message); } };
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
 async function showQR() {
   try { if (!window.qrcode) await loadScript('vendor/qrcode.min.js').catch(() => loadScript('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js')); } catch { return toast('二维码组件加载失败，请用文件导出'); }
@@ -385,7 +421,7 @@ async function scanQR() {
   try { if (!window.jsQR) await loadScript('vendor/jsQR.min.js').catch(() => loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js')); } catch { return toast('扫码组件加载失败'); }
   openSheet(`<div class="grab"></div><b>对准另一台设备上的二维码</b><video class="scan" id="vid" playsinline muted></video><div class="playrow"><button class="btn" id="qimg">从照片识别</button><button class="btn" id="qc">取消</button></div>`);
   let stream, alive = true; const c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
-  const done = async (txt) => { alive = false; stream?.getTracks().forEach(t => t.stop()); closeSheet(); try { const r = await sync.merge(sync.expand(await sync.fromB64(txt.replace(/^VOCAB1:/, '')))); toast(sync.summary(r, '同步完成')); go('settings', null, false); } catch (e) { toast('二维码无效'); } };
+  const done = async (txt) => { alive = false; stream?.getTracks().forEach(t => t.stop()); closeSheet(); try { const r = await sync.merge(sync.expand(await sync.fromB64(txt.replace(/^VOCAB1:/, '')))); await remigrate(); toast(sync.summary(r, '同步完成')); go('settings', null, false); } catch (e) { toast('二维码无效'); } };
   const tryImg = (src, w, h) => { c.width = w; c.height = h; g.drawImage(src, 0, 0, w, h); const r = jsQR(g.getImageData(0, 0, w, h).data, w, h); if (r && r.data.startsWith('VOCAB1:')) { done(r.data); return true; } };
   $('#qc').onclick = () => { alive = false; stream?.getTracks().forEach(t => t.stop()); closeSheet(); };
   $('#qimg').onclick = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.onchange = async () => { const b = await createImageBitmap(inp.files[0]); const s = Math.min(1, 1200 / Math.max(b.width, b.height)); if (!tryImg(b, b.width * s | 0, b.height * s | 0)) toast('照片里没找到二维码'); }; inp.click(); };
@@ -402,11 +438,11 @@ function gistUI() {
   $('#gs').onclick = async () => {
     const t = $('#gt').value.trim(); let id = $('#gi').value.trim(); if (!t) return toast('请先填 token');
     await setKV('gistToken', t); $('#gs').textContent = '同步中…';
-    try { let r = { added: 0, updated: 0 }; if (id) r = await sync.gistPull(t, id); id = await sync.gistPush(t, id); await setKV('gistId', id); await setKV('gistAt', Date.now()); closeSheet(); toast(sync.summary(r, '已同步')); go('settings', null, false); }
+    try { let r = { added: 0, updated: 0 }; if (id) { r = await sync.gistPull(t, id); await remigrate(); } id = await sync.gistPush(t, id); await setKV('gistId', id); await setKV('gistAt', Date.now()); closeSheet(); toast(sync.summary(r, '已同步')); go('settings', null, false); }
     catch (e) { $('#gs').textContent = '同步'; toast(e.message + '，请检查 token / 网络'); }
   };
 }
-async function autoGist() { const t = getKV('gistToken'), id = getKV('gistId'); if (!t || !id || !navigator.onLine) return; try { await sync.gistPull(t, id); await sync.gistPush(t, id); updateBadge(); } catch {} }
+async function autoGist() { const t = getKV('gistToken'), id = getKV('gistId'); if (!t || !id || !navigator.onLine) return; try { await sync.gistPull(t, id); await remigrate(); await sync.gistPush(t, id); updateBadge(); } catch {} }
 
 // ---------- 启动 ----------
 let badgeT; window.addEventListener('vocab-changed', () => { clearTimeout(badgeT); badgeT = setTimeout(updateBadge, 150); });
@@ -414,6 +450,7 @@ setInterval(updateBadge, 60000);
 window.addEventListener('vocab-storage-error', () => toast(store.storageWarning));
 (async () => {
   await store.init(); applyTheme();
+  try { await migrateDict(); } catch (e) { console.warn('migrate', e); }
   if (store.storageWarning) toast(store.storageWarning);
   history.replaceState({ name: 'home' }, ''); go('home', null, false);
   loadDict().catch(() => {});

@@ -14,7 +14,7 @@ export async function merge(data) {
   const res = { items: { added: 0, updated: 0 }, pages: { added: 0, updated: 0 }, kv: { added: 0, updated: 0 } };
   for (const store of ['pages', 'items', 'kv']) for (const r0 of data[store] || []) {
     const r = r0 && typeof r0 === 'object' ? { ...r0 } : r0;
-    if (!r || typeof r.id !== 'string' || (store === 'kv' && r.id === 'gistToken')) continue;
+    if (!r || typeof r.id !== 'string' || (store === 'kv' && (r.id === 'gistToken' || r.id === 'dictVer'))) continue;
     if (store === 'items' && typeof r.text !== 'string') continue;
     if (store === 'pages' && (!Array.isArray(r.units) || r.units.some(u => !u || typeof u.text !== 'string'))) continue;
     if (store === 'items') r.pages = [...new Set([...(r.pages || []), r.page].filter(Boolean))];
