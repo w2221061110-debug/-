@@ -27,20 +27,40 @@ function speakSystem(text, rate) {
     stats.system++; speechSynthesis.speak(u);
   });
 }
-function speakYoudao(text, rate) {
+const yUrl = t => `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(t)}&type=${getKV('accent', 'us') === 'uk' ? 1 : 2}`;
+// 有道 dictvoice 只认词典里有的词/常见短语，任意整句会返回 500（JSON "returned null audio"）。
+// 所以长句先按标点切段：≤3 词的段整段试，失败或更长的段逐词播；读不出的词（如 OCR 错字）跳过。
+export function chunkText(text) {
+  const segs = text.split(/[.,;:!?，。；：！？()\[\]"“”]+|\s[-–—]\s/).map(x => x.trim().split(/\s+/).filter(Boolean)).filter(x => x.length);
+  const out = [];
+  for (const ws of segs) { if (ws.length <= 3) out.push({ t: ws.join(' '), words: ws.length > 1 ? ws : null }); else ws.forEach(w => out.push({ t: w, words: null })); }
+  return out;
+}
+function prefetch(t) { try { fetch(yUrl(t), { mode: 'no-cors' }).catch(() => {}); } catch {} }
+function playOne(t, rate, token) {
   return new Promise((res, rej) => {
-    const type = getKV('accent', 'us') === 'uk' ? 1 : 2;
     let timer, settled = false;
     const finish = error => { if (settled) return; settled = true; clearTimeout(timer); audio.onended = audio.onerror = null; cancelAudio = null; error ? rej(error) : res(); };
     cancelAudio = () => finish(new Error('canceled'));
     audio.onended = () => finish(); audio.onerror = () => finish(new Error('audio'));
-    audio.src = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(text)}&type=${type}`;
-    audio.playbackRate = rate; audio.defaultPlaybackRate = rate;
-    stats.youdao++;
+    audio.src = yUrl(t); audio.playbackRate = rate; audio.defaultPlaybackRate = rate;
     const p = audio.play(); if (p) p.catch(e => finish(e));
-    // Give slow connections time; never time out audio that has started playing.
-    timer = setTimeout(() => { if (audio.currentTime === 0) { audio.pause(); finish(new Error('stall')); } }, 20000);
+    // 没开始播放就算卡住；开始播放后不限时
+    timer = setTimeout(() => { if (audio.currentTime === 0) { audio.pause(); finish(new Error('stall')); } }, 8000);
   });
+}
+async function speakYoudao(text, rate) {
+  const token = generation; stats.youdao++;
+  const parts = chunkText(text); if (!parts.length) throw new Error('empty');
+  if (parts.length === 1 && !parts[0].words) return playOne(parts[0].t, rate, token);
+  let played = 0, lastErr;
+  for (let k = 0; k < parts.length; k++) {
+    if (token !== generation) return;
+    if (parts[k + 1]) prefetch(parts[k + 1].t);
+    try { await playOne(parts[k].t, rate, token); played++; continue; } catch (e) { if (e.message === 'canceled') return; lastErr = e; }
+    if (parts[k].words) for (const w of parts[k].words) { if (token !== generation) return; try { await playOne(w, rate, token); played++; } catch (e) { if (e.message === 'canceled') return; lastErr = e; } }
+  }
+  if (!played) throw lastErr || new Error('audio');
 }
 export function stop() { generation++; cancelAudio?.(); try { audio.pause(); window.speechSynthesis?.cancel(); } catch {} }
 /** 必须在用户手势里调用（iOS 要求） */

@@ -4,7 +4,7 @@ const URL0 = process.env.URL || 'http://localhost:8800/vocab-app/index.html';
 let fails = 0; const ok = (k, c, x = '') => { if (!c) fails++; console.log(c ? 'PASS' : 'FAIL', k, x); };
 (async () => {
   const b = await chromium.launch(); const ctx = await b.newContext({ ...devices['iPhone 13'] });
-  await ctx.addInitScript(() => { window.__tts = 0; if (window.speechSynthesis) speechSynthesis.speak = () => { window.__tts++; }; HTMLMediaElement.prototype.play = function () { if (/youdao/.test(this.src)) (window.__said ||= []).push(decodeURIComponent(this.src.match(/audio=([^&]*)/)[1])); setTimeout(() => this.dispatchEvent(new Event('ended')), 30); return Promise.resolve(); }; });
+  await ctx.addInitScript(() => { window.__tts = 0; if (window.speechSynthesis) speechSynthesis.speak = () => { window.__tts++; }; HTMLMediaElement.prototype.play = function () { const t = /youdao/.test(this.src) ? decodeURIComponent(this.src.match(/audio=([^&]*)/)[1]) : null; if (t) { (window.__said ||= []).push(t); (window.__rates ||= []).push(this.playbackRate); } const bad = t && (t.split(' ').length > 3 || t === 'holistic education'); setTimeout(() => this.dispatchEvent(new Event(bad ? 'error' : 'ended')), 30); return Promise.resolve(); }; });
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(e.message));
   const cdp = await ctx.newCDPSession(p); const T = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, radiusX: 8, radiusY: 8 }] });
   await p.goto(URL0); await p.waitForSelector('.hero');
@@ -23,7 +23,14 @@ let fails = 0; const ok = (k, c, x = '') => { if (!c) fails++; console.log(c ? '
   for (let i = 1; i <= 8; i++) await T('touchMove', a[0] + (z[0] - a[0]) * i / 8, a[1] + (z[1] - a[1]) * i / 8);
   const s1 = await p.evaluate(() => scrollY); await T('touchEnd'); await p.waitForTimeout(400);
   const ph = await p.$eval('.word-big', e => e.textContent).catch(() => '');
-  ok('multi-line drag selects phrase', ph.split(' ').length === 15, ph); ok('page did not scroll while selecting', s0 === s1, s0 + '→' + s1);
+  ok('multi-line drag selects phrase', ph.split(' ').length === 15, ph);
+  await p.waitForTimeout(1500); const said = await p.evaluate(() => window.__said);
+  ok('long phrase never sent whole to youdao', !said.some(x => x.split(' ').length > 3), JSON.stringify(said));
+  ok('long phrase played chunk by chunk', said.filter(x => x === 'superior').length >= 1 && said.includes('holistic'), '');
+  ok('no muted system-voice fallback', (await p.evaluate(() => window.__tts)) === 0);
+  await p.evaluate(() => { window.__said = []; window.__rates = []; document.querySelector('#ws').click(); }); await p.waitForTimeout(1500);
+  const sl = await p.evaluate(() => [window.__said, window.__rates]);
+  ok('slow button plays chunks at 0.7x', sl[0].length > 5 && sl[1].every(r => Math.abs(r - 0.7) < 0.01), JSON.stringify(sl[1].slice(0, 3))); ok('page did not scroll while selecting', s0 === s1, s0 + '→' + s1);
   await p.evaluate(() => document.querySelector('#wclose')?.click());
   // 普通滑动：不选词
   await p.waitForTimeout(800); const m = await c(20);
