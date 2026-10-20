@@ -1,6 +1,13 @@
 // 发音：有道真人/合成音频（国内可用）优先，系统语音回退；短语整体朗读。
 import { getKV } from './store.js';
-const audio = new Audio(); audio.preload = 'auto';
+// iPhone 静音开关会让系统语音(speechSynthesis)没声；<audio> 媒体播放不受静音开关影响，所以有网时先用有道音频
+const audio = new Audio(); audio.preload = 'auto'; audio.setAttribute('playsinline', ''); audio.setAttribute('webkit-playsinline', '');
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+// 第一次手势时用一段静音解锁 audio，之后异步回退/重播也能出声
+const SILENT = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRBqpAAAAAAAAAAAAAAAAAAAA';
+let unlocked = false;
+function unlock() { if (unlocked) return; unlocked = true; try { if (!audio.src) { audio.src = SILENT; const p = audio.play(); p?.catch?.(() => {}); } } catch {} }
+addEventListener('touchend', unlock, { once: true, capture: true }); addEventListener('click', unlock, { once: true, capture: true });
 let voices = []; let generation = 0, cancelAudio;
 function loadVoices() { voices = (window.speechSynthesis?.getVoices?.() || []).filter(v => /^en/i.test(v.lang)); }
 if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
@@ -42,7 +49,7 @@ export async function speak(text, { slow = false } = {}) {
   const token = generation;
   const rate = (getKV('rate', 1)) * (slow ? 0.7 : 1);
   const engine = getKV('engine', 'auto');
-  const order = engine === 'system' ? [speakSystem, speakYoudao] : engine === 'youdao' ? [speakYoudao, speakSystem] : (navigator.onLine === false || /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? [speakSystem, speakYoudao] : [speakYoudao, speakSystem]);
+  const order = engine === 'system' ? [speakSystem, speakYoudao] : engine === 'youdao' ? [speakYoudao, speakSystem] : (navigator.onLine === false ? [speakSystem, speakYoudao] : [speakYoudao, speakSystem]);
   for (const f of order) { if (token !== generation) return false; try { await f(text, rate); return true; } catch (e) { stats.errors++; } }
   if (token === generation) window.dispatchEvent(new Event('vocab-speech-error'));
   return false;
