@@ -199,7 +199,7 @@ VIEWS.page = (id) => {
     const parts = flow.split(/([A-Za-z]+(?:['’\-][A-Za-z]+)*)/);
     let wi = 0;
     view.innerHTML = head + `<div class="card prose" id="prose">${parts.map((s, k) => k % 2 ? `<span class="w${mem.items.has(s.toLowerCase()) ? ' saved' : ''}" data-i="${wi++}">${esc(s)}</span>` : esc(s).replace(/\n/g, '<br>')).join('')}</div>
-    <p class="hint">👆 点单词：发音+释义　✋ 按住不放再拖动：选中短语整体朗读</p>`;
+    <p class="hint tips"><span>👆 点单词：读音 + 释义</span><span>✋ 按住 0.3 秒再拖：选短语</span></p>`;
     proseSelect($('#prose'));
   }
 };
@@ -221,25 +221,29 @@ function proseSelect(root) {
   };
   const edgeWord = (x, y) => { let best = null, bd = 11; for (const w of ws) { const r = w.getBoundingClientRect(); if (y < r.top - 6 || y > r.bottom + 6) continue; const dx = x < r.left ? (r.left - x) * 0.6 : x > r.right ? x - r.right : 0; if (dx < bd) { bd = dx; best = w; } } return best; };
   window.__nearest = nearest;
-  root.addEventListener('pointerdown', e => {
-    // 起点也放宽：按在词的最边缘或词间空隙（±10px 内）也算按到最近的词
-    if (!e.isPrimary) return; const w = e.target.closest('.w') || edgeWord(e.clientX, e.clientY); if (!w) return; root.setPointerCapture(e.pointerId); start = end = +w.dataset.i; moved = false; sx = e.clientX; sy = e.clientY;
-    timer = setTimeout(() => { selecting = true; mark(); navigator.vibrate?.(10); }, 380);
-  });
-  root.addEventListener('pointermove', e => {
-    if (!selecting) { if (Math.hypot(e.clientX - sx, e.clientY - sy) > 10) { clearTimeout(timer); moved = true; } return; }
-    e.preventDefault(); const i = nearest(e.clientX, e.clientY); if (i >= 0) { end = i; mark(); }
-  });
-  root.addEventListener('contextmenu', e => e.preventDefault());
-  root.addEventListener('touchmove', e => { if (selecting) e.preventDefault(); }, { passive: false });
-  const up = (e) => {
-    clearTimeout(timer); if (start < 0) return;
-    if (selecting && e && e.clientX != null) { const i = nearest(e.clientX, e.clientY); if (i >= 0) end = i; }
-    if (selecting) { const [a, b] = [Math.min(start, end), Math.max(start, end)]; const phrase = ws.slice(a, b + 1).map(w => w.textContent).join(' '); selecting = false; speak(phrase); openWord(phrase); setTimeout(clear, 600); }
-    else if (!moved) { const t = ws[start].textContent; ws[start].classList.add('sel'); speak(t); openWord(t); setTimeout(clear, 400); }
-    start = -1;
+  // 触屏用 touch 事件（iOS Safari 上 pointer 事件在页面开始滚动时会被 pointercancel 打断，导致长按拖不动）；鼠标用 pointer 事件
+  const begin = (x, y, target) => { const w = (target.closest && target.closest('.w')) || edgeWord(x, y); if (!w) return false; start = end = +w.dataset.i; moved = false; selecting = false; sx = x; sy = y; clearTimeout(timer); timer = setTimeout(() => { if (start < 0 || moved) return; selecting = true; mark(); navigator.vibrate?.(10); }, 350); return true; };
+  const drag = (x, y) => { if (start < 0) return false; if (!selecting) { if (Math.hypot(x - sx, y - sy) > 10) { clearTimeout(timer); moved = true; } return false; } const i = nearest(x, y); if (i >= 0) { end = i; mark(); } return true; };
+  const up = (x, y) => {
+    clearTimeout(timer); if (start < 0) return false; let acted = false;
+    if (selecting && x != null) { const i = nearest(x, y); if (i >= 0) end = i; }
+    if (selecting) { const [a, b] = [Math.min(start, end), Math.max(start, end)]; const phrase = ws.slice(a, b + 1).map(w => w.textContent).join(' '); selecting = false; speak(phrase); openWord(phrase); setTimeout(clear, 600); acted = true; }
+    else if (!moved) { const t = ws[start].textContent; ws[start].classList.add('sel'); speak(t); openWord(t); setTimeout(clear, 400); acted = true; }
+    start = -1; return acted;
   };
-  root.addEventListener('pointerup', up); root.addEventListener('pointercancel', () => { clearTimeout(timer); selecting = false; start = -1; clear(); });
+  const cancel = () => { clearTimeout(timer); selecting = false; start = -1; clear(); };
+  let lastTouch = 0;
+  root.addEventListener('touchstart', e => { lastTouch = Date.now(); if (e.touches.length > 1) return cancel(); const t = e.touches[0]; begin(t.clientX, t.clientY, e.target); }, { passive: true });
+  root.addEventListener('touchmove', e => { lastTouch = Date.now(); const t = e.touches[0]; if (drag(t.clientX, t.clientY) && e.cancelable) e.preventDefault(); }, { passive: false });
+  root.addEventListener('touchend', e => { lastTouch = Date.now(); const t = e.changedTouches[0]; if (up(t.clientX, t.clientY) && e.cancelable) e.preventDefault(); /* 阻止补发 click，免得刚弹出的释义被关掉 */ }, { passive: false });
+  root.addEventListener('touchcancel', () => { lastTouch = Date.now(); if (!selecting) cancel(); }, { passive: true });
+  const isTouchPtr = e => e.pointerType === 'touch' || Date.now() - lastTouch < 800;
+  root.addEventListener('pointerdown', e => { if (!e.isPrimary || isTouchPtr(e)) return; if (begin(e.clientX, e.clientY, e.target)) root.setPointerCapture?.(e.pointerId); });
+  root.addEventListener('pointermove', e => { if (isTouchPtr(e)) return; if (drag(e.clientX, e.clientY)) e.preventDefault(); });
+  root.addEventListener('contextmenu', e => e.preventDefault());
+  root.addEventListener('selectstart', e => e.preventDefault());
+  root.addEventListener('pointerup', e => { if (isTouchPtr(e)) return; up(e.clientX, e.clientY); });
+  root.addEventListener('pointercancel', e => { if (isTouchPtr(e)) return; cancel(); });
 }
 
 // ---------- 单词详情 ----------
