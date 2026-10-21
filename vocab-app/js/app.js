@@ -448,6 +448,20 @@ function gistUI() {
 }
 async function autoGist() { const t = getKV('gistToken'), id = getKV('gistId'); if (!t || !id || !navigator.onLine) return; try { await sync.gistPull(t, id); await remigrate(); await sync.gistPush(t, id); updateBadge(); } catch {} }
 
+// ---------- 词包链接：?pack=macro → 同站 packs/macro.json ----------
+async function openPack(name) {
+  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)) return toast('词包链接无效');
+  let data;
+  try { const r = await fetch(`packs/${name}.json`, { cache: 'no-store' }); if (!r.ok) throw new Error(r.status); data = await r.json(); if (data?.app !== 'vocab-app' || !Array.isArray(data.items)) throw new Error('bad'); }
+  catch { return toast('词包下载失败，请检查网络后重新打开链接'); }
+  const title = String(data.name || name).slice(0, 40); const n = data.items.length;
+  const missing = data.items.filter(i => !mem.items.get(i.id)?.pages?.length || !(data.pages || []).every(p => mem.pages.has(p.id))).length;
+  if (!missing) { toast(`「${title}」已经导入过了`); return go('book'); }
+  openSheet(`<div class="grab"></div><b style="font-size:20px">导入「${esc(title)}」${n} 个词？</b><p class="hint">共 ${(data.pages || []).length} 组，会和现有生词本合并，不会删除已有的词和复习进度。</p><div class="playrow"><button class="btn" id="pkc">取消</button><button class="btn pri" id="pko">导入</button></div>`);
+  $('#pkc').onclick = closeSheet;
+  $('#pko').onclick = async () => { $('#pko').disabled = true; try { const r = await sync.merge(data); await remigrate(); closeSheet(); toast(sync.summary(r, '导入完成')); go('book'); } catch (e) { closeSheet(); toast('导入失败：' + e.message); } };
+}
+
 // ---------- 启动 ----------
 let badgeT; window.addEventListener('vocab-changed', () => { clearTimeout(badgeT); badgeT = setTimeout(updateBadge, 150); });
 setInterval(updateBadge, 60000);
@@ -456,8 +470,10 @@ window.addEventListener('vocab-storage-error', () => toast(store.storageWarning)
   await store.init(); applyTheme();
   try { await migrateDict(); } catch (e) { console.warn('migrate', e); }
   if (store.storageWarning) toast(store.storageWarning);
-  history.replaceState({ name: 'home' }, ''); go('home', null, false);
+  const packName = new URLSearchParams(location.search).get('pack');
+  history.replaceState({ name: 'home' }, '', packName != null ? location.pathname + location.hash : location.href); go('home', null, false);
   loadDict().catch(() => {});
+  if (packName != null) openPack(packName);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   autoGist(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { updateBadge(); autoGist(); } });
   window.__app = { store, mem, parseText, translate, speak, review, sync, go, importText };
