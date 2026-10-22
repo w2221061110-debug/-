@@ -83,11 +83,11 @@ let route = { name: 'home' };
 function go(name, arg, push = true) {
   stop(); route = { name, arg };
   if (push) history.pushState(route, '');
-  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === ({ page: 'home', paste: 'home', import: 'home' }[name] || name)));
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === ({ page: 'home', paste: 'home', import: 'home', lawsess: 'law', session: 'review' }[name] || name)));
   $('#back').hidden = !['page', 'paste', 'import'].includes(name);
   $('#topR').innerHTML = '';
   (VIEWS[name] || VIEWS.home)(arg);
-  window.scrollTo(0, 0); updateBadge();
+  window.scrollTo(0, 0); updateBadge(); updateLawBadge();
 }
 addEventListener('popstate', e => go(e.state?.name || 'home', e.state?.arg, false));
 $('#back').onclick = () => history.length > 1 ? history.back() : go('home');
@@ -385,7 +385,7 @@ VIEWS.settings = () => {
     <div><span>隔空投送 / 文件<small>导出后用「隔空投送」发到另一台设备，那边点「导入文件」合并</small></span><button class="btn sm" id="exp">导出</button><button class="btn sm" id="imp">导入文件</button></div>
     <div><span>扫码同步<small>一台显示二维码，另一台扫一扫（不含照片）</small></span><button class="btn sm" id="qr">显示</button><button class="btn sm" id="scan">扫码</button></div>
     <div><span>自动云同步（可选）<small>用 GitHub Gist 保存，需要一个 token；两台设备填同样的就行</small></span><button class="btn sm" id="gist">${getKV('gistToken') ? '立即同步' : '设置'}</button></div></div>
-  <div class="sec">数据</div><div class="card set"><div><span>共 ${mem.items.size} 个词 · ${mem.pages.size} 页<small>数据只保存在这台设备的浏览器里，记得定期导出备份</small></span></div>
+  <div class="sec">数据</div><div class="card set"><div><span>共 ${mem.items.size} 个词 · ${mem.pages.size} 页 · ${laws().length} 条法条<small>数据只保存在这台设备的浏览器里，记得定期导出备份</small></span></div>
     <div><span>清空所有数据</span><button class="btn sm danger" id="clr">清空</button></div></div>
   <p class="hint" style="text-align:center">拾词 v1.0 · 离线词典来自 ECDICT（MIT）</p>`;
   view.querySelectorAll('.seg').forEach(s => s.onclick = e => { const b = e.target.closest('button'); if (!b) return; setKV(s.dataset.k, b.dataset.v); s.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); if (s.dataset.k === 'theme') applyTheme(); });
@@ -448,12 +448,111 @@ function gistUI() {
 }
 async function autoGist() { const t = getKV('gistToken'), id = getKV('gistId'); if (!t || !id || !navigator.onLine) return; try { await sync.gistPull(t, id); await remigrate(); await sync.gistPush(t, id); updateBadge(); } catch {} }
 
+// ---------- 必备法条：单独的牌组，存在 kv（law:xxx），不进生词本；随备份/云同步一起走 ----------
+const LAWMODES = { sec: ['条号 → 原文', '看条号，背出原文'], rev: ['原文 → 条号', '看原文，说出条号'], cloze: ['关键词填空', '挖空关键词，逐个回忆'] };
+const laws = () => [...mem.kv.values()].filter(k => String(k.id).startsWith('law:') && k.v && typeof k.v.text === 'string').map(k => k.v).sort((a, b) => (a.deck || '').localeCompare(b.deck || '') || (a.order || 0) - (b.order || 0));
+const saveLaw = l => store.put('kv', { id: 'law:' + l.id, v: l, updated: Date.now() });
+function lawCounts() { return queueCounts(laws(), getKV('lawNewPerDay', 10)); }
+const lawLevel = l => level(l);
+function lawHtml(l, { hideSec = false } = {}) {
+  let t = esc(l.text);
+  if (hideSec) t = t.replace(/Section\s+\d+[A-Z]*(\s+of the [^\n]*?\(NSW\))?/g, 'Section ▢▢').replace(/^\((\d+)\)/, '(▢)');
+  for (const k of [...(l.keys || [])].sort((a, b) => b.length - a.length)) { const ek = esc(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); t = t.replace(new RegExp(`(^|[^\\w>])(${ek})(?![\\w<])`, 'i'), (_, a, m) => `${a}<mark>${m}</mark>`); }
+  return t.replace(/\n/g, '<br>');
+}
+function lawCloze(l) {
+  let t = esc(l.text), n = 0;
+  for (const k of [...(l.keys || [])].sort((a, b) => b.length - a.length)) { const ek = esc(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); t = t.replace(new RegExp(`(^|[^\\w>])(${ek})(?![\\w<])`, 'i'), (_, a, m) => `${a}<button class="blank" data-b="${n++}"><span>${m}</span></button>`); }
+  return t.replace(/\n/g, '<br>');
+}
+VIEWS.law = () => {
+  setTitle('必备法条');
+  const ls = laws(); const { due, nw } = lawCounts(); const mode = getKV('lawMode', 'sec');
+  if (!ls.length) { view.innerHTML = `<div class="empty"><div class="e">⚖️</div>还没有法条<br><small>打开老师/同学发的法条链接（…?pack=law-unit8）就会自动导入</small><br><button class="btn pri" id="lwImp" style="margin-top:16px">导入 Unit 8 必备法条（5 条）</button></div>`; $('#lwImp').onclick = () => openPack('law-unit8'); return; }
+  const decks = new Map(); for (const l of ls) { const k = l.deckName || l.deck || '法条'; if (!decks.has(k)) decks.set(k, []); decks.get(k).push(l); }
+  view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新学</small></div><div><b>${ls.filter(l => lawLevel(l) === 3).length}/${ls.length}</b><small>已掌握</small></div></div>
+  <div class="sec">背诵方式</div><div class="modes law3">${Object.entries(LAWMODES).map(([k, [a, b]]) => `<button class="mode ${k === mode ? 'on' : ''}" data-m="${k}"><b>${a}</b><small>${b}</small></button>`).join('')}</div>
+  <div style="display:grid;gap:10px;margin-top:16px"><button class="btn pri" id="lwStart" style="min-height:58px;font-size:18px" ${due + nw ? '' : 'disabled'}>${due + nw ? `开始背诵 ${due + nw} 条（到期 ${due} · 新学 ${nw}）` : '今天的法条背完啦 🎉'}</button>
+  <button class="btn" id="lwFree">自由练习（全部 ${ls.length} 条，打乱顺序）</button></div>
+  ${[...decks].map(([name, arr]) => `<div class="sec">${esc(name)}<small>${arr.length} 条</small></div><div class="laws">${arr.map(l => `<button class="lawi" data-id="${esc(l.id)}"><span class="secno">${esc(l.sec)}</span><span class="body"><b>${esc(l.topic)}</b><small>${esc(l.topicCn || '')}</small><div class="pv">${esc(l.text.replace(/\n/g, ' '))}</div></span><i class="lvl l${lawLevel(l)}"></i></button>`).join('')}</div>`).join('')}
+  <p class="hint">和单词分开保存，不会混进生词本。同样按遗忘曲线（SM-2）安排复习，进度随「导出 / 云同步」一起走。</p>`;
+  view.querySelectorAll('.mode').forEach(b => b.onclick = () => { setKV('lawMode', b.dataset.m); go('law', null, false); });
+  view.querySelectorAll('.lawi').forEach(b => b.onclick = () => openLaw(b.dataset.id));
+  $('#lwStart').onclick = () => { const now = Date.now(); startLaw([...ls.filter(l => isDue(l.srs, now)).sort((a, b) => a.srs.due - b.srs.due), ...ls.filter(l => isNew(l.srs)).slice(0, nw)], true); };
+  $('#lwFree').onclick = () => startLaw([...ls].sort(() => Math.random() - .5), false);
+};
+function lawDetail(l, { hideSec } = {}) {
+  return `<div class="lawtext">${lawHtml(l, { hideSec })}</div><div class="lawcn"><b>大白话</b>${esc(l.cn || '')}${l.tip ? `<div class="tip">💡 ${esc(l.tip)}</div>` : ''}</div>`;
+}
+function openLaw(id) {
+  const l = laws().find(x => x.id === id); if (!l) return;
+  openSheet(`<div class="grab"></div><div class="lawhead"><span class="secno xl">${esc(l.sec)}</span><div><b>${esc(l.topic)}</b><small>${esc(l.topicCn || '')} · ${esc(l.act || '')}</small></div></div>${lawDetail(l)}
+  <div class="playrow"><button class="btn pri" id="lp">${ICON.spk} 朗读原文</button><button class="btn" id="lsl">🐢 慢速</button></div><div class="playrow"><button class="btn" id="lc">关闭</button></div>`);
+  $('#lp').onclick = () => speak(l.text.replace(/\n/g, ' ')); $('#lsl').onclick = () => speak(l.text.replace(/\n/g, ' '), { slow: true }); $('#lc').onclick = closeSheet;
+}
+let lsess;
+VIEWS.lawsess = () => go('law', null, false);
+function startLaw(list, graded) {
+  if (!list.length) return toast('没有法条');
+  lsess = { list: list.map(l => l.id), i: 0, graded, right: 0, mode: getKV('lawMode', 'sec') };
+  route = { name: 'lawsess' }; history.pushState(route, ''); $('#back').hidden = false; setTitle(LAWMODES[lsess.mode][0]);
+  showLaw();
+}
+function showLaw() {
+  if (lsess.i >= lsess.list.length) { setTitle('完成'); view.innerHTML = `<div class="done card"><div class="e">⚖️</div><h2>这一轮背完了</h2><p class="hint">共 ${lsess.i} 次，记得 ${lsess.right} 次</p><button class="btn pri" id="ok">好的</button></div>`; $('#ok').onclick = () => go('law'); return; }
+  const l = laws().find(x => x.id === lsess.list[lsess.i]); if (!l) { lsess.i++; return showLaw(); }
+  const m = lsess.mode; const pct = lsess.i / lsess.list.length * 100;
+  const top = `<div class="fc-top"><div class="progress"><i style="width:${pct}%"></i></div><small>${lsess.i + 1}/${lsess.list.length}</small></div>`;
+  const head = `<div class="lawhead c"><span class="secno xl">${esc(l.sec)}</span><div><b>${esc(l.topic)}</b><small>${esc(l.topicCn || '')}</small></div></div>`;
+  let front;
+  if (m === 'sec') front = `<small class="act">${esc(l.act)}</small>${head}<p class="hint">先在心里（或小声）把原文背一遍，再看答案</p>`;
+  else if (m === 'rev') front = `<small class="act">这是哪一条？说出主题和条号</small><div class="lawtext">${lawHtml(l, { hideSec: true })}</div>`;
+  else front = `${head}<div class="lawtext cloze">${lawCloze(l)}</div><p class="hint">点空格逐个揭开，背不出的多看两眼</p>`;
+  view.innerHTML = top + `<div class="card flash lawcard" id="fc">${front}<div id="ansbox" style="width:100%"></div><button class="btn pri" id="show" style="margin-top:12px;min-width:180px">${m === 'cloze' ? '全部揭开' : '显示答案'}</button></div><div id="gb"></div>`;
+  view.querySelectorAll('.blank').forEach(b => b.onclick = () => b.classList.add('on'));
+  $('#show').onclick = () => {
+    $('#show').remove();
+    if (m === 'cloze') view.querySelectorAll('.blank').forEach(b => b.classList.add('on'));
+    $('#ansbox').innerHTML = `<div class="ans">${m === 'rev' ? head : ''}${m === 'sec' ? lawDetail(l) : `<div class="lawcn"><b>大白话</b>${esc(l.cn || '')}${l.tip ? `<div class="tip">💡 ${esc(l.tip)}</div>` : ''}</div>`}<button class="btn sm" id="lpl" style="margin-top:10px">${ICON.spk} 朗读原文</button></div>`;
+    $('#lpl').onclick = () => speak(l.text.replace(/\n/g, ' '));
+    const pv = preview(l.srs);
+    $('#gb').innerHTML = `<div class="grades">${[[0, '忘了'], [3, '模糊'], [4, '记得'], [5, '简单']].map(([g, t]) => `<button class="g${g}" data-g="${g}">${t}<small>${lsess.graded ? fmtDur(pv[g]) : ''}</small></button>`).join('')}</div>`;
+    view.querySelectorAll('[data-g]').forEach(b => b.onclick = () => gradeLaw(l, +b.dataset.g));
+  };
+}
+async function gradeLaw(l, g) {
+  if (lsess.graded) { const first = !l.srs || !l.srs.firstAt; l.srs = review(l.srs || newSrs(), g); if (first) l.srs.firstAt = Date.now(); await saveLaw(l); }
+  if (g >= 3) lsess.right++; else if (lsess.graded) lsess.list.push(l.id);
+  lsess.i++; window.scrollTo(0, 0); showLaw(); updateLawBadge();
+}
+function updateLawBadge() { const b = $('#lawBadge'); if (!b) return; const n = lawCounts().total; b.hidden = !n; b.textContent = n > 99 ? '99+' : n; }
+async function importLaws(data) {
+  const out = { added: 0, updated: 0 };
+  for (const l0 of data.laws) {
+    if (!l0 || typeof l0.id !== 'string' || typeof l0.text !== 'string') continue;
+    const cur = getKV('law:' + l0.id);
+    const l = { ...l0, deck: data.pack || 'law', deckName: data.name || '法条', packAt: data.at || 0, srs: cur?.srs || null };
+    if (!cur) { await saveLaw(l); out.added++; } else if ((cur.packAt || 0) < (data.at || 0)) { await saveLaw(l); out.updated++; }
+  }
+  return out;
+}
+
 // ---------- 词包链接：?pack=macro → 同站 packs/macro.json ----------
 async function openPack(name) {
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)) return toast('词包链接无效');
   let data;
   try { const r = await fetch(`packs/${name}.json`, { cache: 'no-store' }); if (!r.ok) throw new Error(r.status); data = await r.json(); if (data?.app !== 'vocab-app' || !Array.isArray(data.items)) throw new Error('bad'); }
   catch { return toast('词包下载失败，请检查网络后重新打开链接'); }
+  if (data.kind === 'law') {
+    if (!Array.isArray(data.laws)) return toast('词包链接无效');
+    const t = String(data.name || name).slice(0, 40); const nl = data.laws.length;
+    const miss = data.laws.filter(l => { const c = getKV('law:' + l.id); return !c || (c.packAt || 0) < (data.at || 0); }).length;
+    if (!miss) { toast(`「${t}」已经导入过了`); return go('law'); }
+    openSheet(`<div class="grab"></div><b style="font-size:20px">导入「${esc(t)}」${nl} 条法条？</b><p class="hint">放进「法条」页单独背诵，不会混进生词本；已有的背诵进度会保留。</p><div class="playrow"><button class="btn" id="pkc">取消</button><button class="btn pri" id="pko">导入</button></div>`);
+    $('#pkc').onclick = closeSheet;
+    $('#pko').onclick = async () => { $('#pko').disabled = true; const r = await importLaws(data); closeSheet(); toast(`导入完成：法条新增 ${r.added}、更新 ${r.updated}`); go('law'); };
+    return;
+  }
   const title = String(data.name || name).slice(0, 40); const n = data.items.length;
   const missing = data.items.filter(i => !mem.items.get(i.id)?.pages?.length || !(data.pages || []).every(p => mem.pages.has(p.id))).length;
   if (!missing) { toast(`「${title}」已经导入过了`); return go('book'); }
@@ -463,7 +562,7 @@ async function openPack(name) {
 }
 
 // ---------- 启动 ----------
-let badgeT; window.addEventListener('vocab-changed', () => { clearTimeout(badgeT); badgeT = setTimeout(updateBadge, 150); });
+let badgeT; window.addEventListener('vocab-changed', () => { clearTimeout(badgeT); badgeT = setTimeout(() => { updateBadge(); updateLawBadge(); }, 150); });
 setInterval(updateBadge, 60000);
 window.addEventListener('vocab-storage-error', () => toast(store.storageWarning));
 (async () => {
@@ -476,5 +575,5 @@ window.addEventListener('vocab-storage-error', () => toast(store.storageWarning)
   if (packName != null) openPack(packName);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   autoGist(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { updateBadge(); autoGist(); } });
-  window.__app = { store, mem, parseText, translate, speak, review, sync, go, importText };
+  window.__app = { laws, importLaws, store, mem, parseText, translate, speak, review, sync, go, importText };
 })();
