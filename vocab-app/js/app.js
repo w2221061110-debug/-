@@ -19,7 +19,7 @@ let toastT; function toast(msg, action) {
   t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), action ? 6000 : 2200);
 }
 window.__toast = toast;
-window.addEventListener('vocab-speech-error', () => toast('发音未能播放，请点播放按钮重试，或在设置中切换系统语音。'));
+window.addEventListener('vocab-speech-error', () => $('#toast').classList.contains('act') && $('#toast').classList.contains('show') ? null : toast('发音未能播放，请点播放按钮重试，或在设置中切换系统语音。'));
 $('#toast').setAttribute('role', 'status');
 
 // ---------- 主题 ----------
@@ -29,13 +29,14 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 // ---------- 数据 ----------
 const items = () => [...mem.items.values()];
 const pagesSorted = () => [...mem.pages.values()].sort((a, b) => b.created - a.created);
-function dueList(now = Date.now()) { return items().filter(i => isDue(i.srs, now)).sort((a, b) => a.srs.due - b.srs.due); }
-function newList() { return items().filter(i => isNew(i.srs)).sort((a, b) => a.created - b.created); }
+const live = () => items().filter(i => !i.cut); // 已斩的词不进复习队列
+function dueList(now = Date.now()) { return live().filter(i => isDue(i.srs, now)).sort((a, b) => a.srs.due - b.srs.due); }
+function newList() { return live().filter(i => isNew(i.srs)).sort((a, b) => a.created - b.created); }
 function newToday() { const t = dayStart(); return items().filter(i => i.srs && i.srs.firstAt >= t).length; }
-export function reviewCounts() { return queueCounts(items(), getKV('newPerDay', 20)); }
+export function reviewCounts() { return queueCounts(live(), getKV('newPerDay', 20)); }
 function queueCount() { return reviewCounts().total; }
 function updateBadge() { const n = queueCount(); const b = $('#badge'); b.hidden = !n; b.textContent = n > 99 ? '99+' : n; try { n ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.(); } catch {} }
-function level(i) { const s = i.srs; if (!s || !s.reps) return 0; return s.interval >= 21 ? 3 : s.interval >= 4 ? 2 : 1; }
+function level(i) { if (i.cut) return 3; const s = i.srs; if (!s || !s.reps) return 0; return s.interval >= 21 ? 3 : s.interval >= 4 ? 2 : 1; }
 
 async function saveUnits(units, pageId) {
   const now = Date.now(); let n = 0;
@@ -250,9 +251,10 @@ function proseSelect(root) {
 async function openWord(text, opts = {}) {
   const id = text.toLowerCase(); let it = mem.items.get(id);
   openSheet(`<div class="grab"></div><div class="word-big">${esc(text)}</div><div class="phon" id="wph">${it?.phon ? '/' + esc(it.phon) + '/' : ''}</div>
-    <div class="playrow"><button class="btn pri" id="wp">${ICON.spk} 发音</button><button class="btn" id="ws">🐢 慢速</button></div>
+    <div class="playrow"><button class="btn pri" id="wp">${ICON.spk} 发音</button><button class="btn" id="ws">🐢 慢速</button>${it ? `<button class="btn cutb" id="wcut" title="${it.cut ? '恢复复习' : '已经会了，斩掉不再复习'}">${it.cut ? '↩︎ 恢复' : '✂︎ 斩'}</button>` : ''}</div>
     <div class="cn-big" id="wcn">${esc(it?.cn || '查询中…')}</div><div class="src" id="wsrc"></div>
     <div class="playrow"><button class="btn ${it ? 'danger' : ''}" id="wsave">${it ? '从生词本移除' : '＋ 加入生词本'}</button><button class="btn" id="wclose">关闭</button></div>`, { modal: false });
+  $('#wcut') && ($('#wcut').onclick = async () => { const cur = mem.items.get(id); closeSheet(); if (cur.cut) await uncut(cur); else { await cutWord(cur); if (route.name === 'book') go('book', null, false); } });
   $('#wp').onclick = () => speak(text); $('#ws').onclick = () => speak(text, { slow: true }); $('#wclose').onclick = closeSheet;
   const rp = translate(text);
   $('#wsave').onclick = () => saveToggle(null); // 立即保存，不等在线翻译；释义随后补上
@@ -284,19 +286,20 @@ VIEWS.book = () => {
   setTitle('生词本');
   const all = items();
   view.innerHTML = `<input class="search" id="q" type="search" placeholder="🔍 搜索英文或中文" value="${esc(bookQ)}">
-  <div class="chips">${[['all', '全部', all.length], ['due', '待复习', dueList().length], ['new', '新词', newList().length], ['learn', '学习中', all.filter(i => level(i) && level(i) < 3).length], ['done', '已掌握', all.filter(i => level(i) === 3).length]].map(([k, l, n]) => `<button class="chip ${bookFilter === k ? 'on' : ''}" data-f="${k}">${l} ${n}</button>`).join('')}</div><div id="bl"></div>`;
+  <div class="chips">${[['all', '全部', all.length], ['due', '待复习', dueList().length], ['new', '新词', newList().length], ['learn', '学习中', all.filter(i => level(i) && level(i) < 3).length], ['done', '已掌握', all.filter(i => level(i) === 3).length], ['cut', '已斩', all.filter(i => i.cut).length]].map(([k, l, n]) => `<button class="chip ${bookFilter === k ? 'on' : ''}" data-f="${k}">${l} ${n}</button>`).join('')}</div><div id="bl"></div>`;
   $('#q').oninput = e => { bookQ = e.target.value; renderBook(); };
   view.querySelectorAll('.chip').forEach(c => c.onclick = () => { bookFilter = c.dataset.f; go('book', null, false); });
   renderBook();
 };
 function renderBook() {
   const q = bookQ.trim().toLowerCase(); const now = Date.now();
-  const f = { all: () => true, due: i => isDue(i.srs, now), new: i => isNew(i.srs), learn: i => level(i) && level(i) < 3, done: i => level(i) === 3 }[bookFilter];
+  const f = { all: () => true, due: i => isDue(i.srs, now), new: i => isNew(i.srs), learn: i => level(i) && level(i) < 3, done: i => level(i) === 3, cut: i => !!i.cut }[bookFilter] || (() => true);
   const list = items().filter(f).filter(i => !q || i.id.includes(q) || (i.cn || '').includes(q));
   if (!list.length) { $('#bl').innerHTML = `<div class="empty"><div class="e">📖</div>${mem.items.size ? '没有符合的单词' : '导入的单词会自动出现在这里'}</div>`; return; }
   const groups = new Map();
   for (const i of list.sort((a, b) => a.created - b.created)) { const gs = [...new Set([...(i.pages || []), i.page].filter(g => g && mem.pages.has(g)))]; for (const g of gs.length ? gs : ['']) { if (!groups.has(g)) groups.set(g, []); groups.get(g).push(i); } }
-  $('#bl').innerHTML = [...groups].sort((a, b) => (mem.pages.get(b[0])?.created || 0) - (mem.pages.get(a[0])?.created || 0)).map(([g, arr]) => { const p = mem.pages.get(g); return `<div class="group"><div class="ghead">${p?.thumb ? `<img src="${esc(p.thumb)}" alt="">` : ''}<b>${esc(p?.title || '单独添加')}</b><small>${arr.length}</small>${p ? `<button class="btn sm" data-pg="${esc(g)}">打开</button>` : ''}</div><div class="wl">${arr.map(i => `<button class="wi" data-id="${esc(i.id)}"><i class="lvl l${level(i)}"></i><span class="body"><div class="en">${esc(i.text)}</div><div class="cn" data-cn="${esc(i.id)}">${esc(shortCn(i.cn))}</div></span><span class="spk icon" style="color:var(--acc)">${ICON.spk}</span></button>`).join('')}</div></div>`; }).join('');
+  $('#bl').innerHTML = [...groups].sort((a, b) => (mem.pages.get(b[0])?.created || 0) - (mem.pages.get(a[0])?.created || 0)).map(([g, arr]) => { const p = mem.pages.get(g); return `<div class="group"><div class="ghead">${p?.thumb ? `<img src="${esc(p.thumb)}" alt="">` : ''}<b>${esc(p?.title || '单独添加')}</b><small>${arr.length}</small>${p ? `<button class="btn sm" data-pg="${esc(g)}">打开</button>` : ''}</div><div class="wl">${arr.map(i => `<button class="wi" data-id="${esc(i.id)}"><i class="lvl l${level(i)}${i.cut ? ' cut' : ''}"></i><span class="body"><div class="en">${esc(i.text)}</div><div class="cn" data-cn="${esc(i.id)}">${esc(shortCn(i.cn))}</div></span><span class="spk icon" style="color:var(--acc)">${ICON.spk}</span></button>`).join('')}</div></div>`; }).join('');
+  if (bookFilter === 'cut') $('#bl').insertAdjacentHTML('afterbegin', `<p class="hint">斩掉的词不再出现在复习里，但算作已掌握。点开单词可以「恢复复习」。</p>`);
   $('#bl').querySelectorAll('.wi').forEach(b => b.onclick = () => { const it = mem.items.get(b.dataset.id); speak(it.text); openWord(it.text); });
   $('#bl').querySelectorAll('[data-pg]').forEach(b => b.onclick = () => go('page', b.dataset.pg));
 }
@@ -305,19 +308,74 @@ function renderBook() {
 /** 今日已学：今天（凌晨 4 点起）评过分的不同卡片数，直接从每张卡的 srs.last / srs.firstAt 推算，无需额外日志 */
 function studiedToday(list, now = Date.now()) { const t = dayStart(now); const done = list.filter(i => i.srs && (i.srs.last || 0) >= t); const nw = done.filter(i => (i.srs.firstAt || 0) >= t).length; return { n: done.length, nw, rv: done.length - nw }; }
 function todayLine(list, unit) { const s = studiedToday(list); return `<div class="todayline"><span>今日已学</span><b>${s.n}</b><span>${unit}</span><small>${s.n ? `新学 ${s.nw} · 复习 ${s.rv}` : '还没开始，加油'}</small></div>`; }
-const MODES = { en: ['英 → 中', '看英文，想中文'], cn: ['中 → 英', '看中文，想英文'], listen: ['听音选义', '听发音，四选一'], spell: ['听写', '听发音，拼出来'] };
+const MODES = { en: ['英 → 中', '看英文，想中文'], cn: ['中 → 英', '看中文，想英文'], listen: ['听音选义', '听发音，四选一'], pic: ['看图选义', '看图片，四选一'], spell: ['听写', '听发音，拼出来'] };
+// ---------- 每日任务 / 打卡 ----------
+// 每天一条 kv「day:YYYY-MM-DD」记下今天学过（评过分、自由练习答过、斩掉）的不同单词 id；打卡日期存在 kv「checkins」。都会随导出/云同步，合并时取并集。
+const dayKey = (now = Date.now()) => localDate(new Date(dayStart(now)));
+const dayIds = (k = dayKey()) => getKV('day:' + k, null)?.ids || [];
+const goal = () => Math.max(1, +getKV('goal', 30) || 30);
+const checkins = () => getKV('checkins', []) || [];
+function wordsToday(now = Date.now()) {
+  const t = dayStart(now); const set = new Set(dayIds(dayKey(now)).filter(id => mem.items.has(id)));
+  for (const i of items()) if (i.srs && (i.srs.last || 0) >= t) set.add(i.id);
+  const done = [...set].map(id => mem.items.get(id)); const nw = done.filter(i => !i.srs || (i.srs.firstAt || 0) >= t).length;
+  return { n: done.length, nw, rv: done.length - nw };
+}
+function streak(now = Date.now()) {
+  const set = new Set(checkins()); const d = new Date(dayStart(now)); if (!set.has(localDate(d))) d.setDate(d.getDate() - 1);
+  let n = 0; while (set.has(localDate(d))) { n++; d.setDate(d.getDate() - 1); } return n;
+}
+async function logStudy(id) {
+  const k = dayKey(); const ids = dayIds(k); if (!ids.includes(id)) await setKV('day:' + k, { ids: [...ids, id] });
+  const g = goal(); if (wordsToday().n >= g && !checkins().includes(k)) { await setKV('checkins', [...checkins(), k].sort().slice(-800)); celebrate(); }
+}
+function celebrate() {
+  const n = streak();
+  const w = document.createElement('div'); w.className = 'celebrate'; w.innerHTML = `<div class="cbox"><div class="e">🎉</div><h2>今日任务完成</h2><p>已学 ${goal()} 个 · 自动打卡</p><div class="fire">🔥 连续 <b>${n}</b> 天</div><button class="btn pri" id="cbok">继续</button></div>${'<i></i>'.repeat(24)}`;
+  document.body.append(w); navigator.vibrate?.([20, 40, 20]);
+  w.querySelectorAll('i').forEach((c, k) => { c.style.left = (k * 37 % 100) + '%'; c.style.animationDelay = (k % 8) * 0.08 + 's'; c.style.background = ['#e2a33b', '#2f5d50', '#c4573f', '#8cc7b2'][k % 4]; });
+  const close = () => w.remove(); w.querySelector('#cbok').onclick = close; setTimeout(() => w.isConnected && w.classList.add('fadeout'), 3800); setTimeout(close, 4300);
+}
+function goalCard() {
+  const g = goal(), s = wordsToday(), pct = Math.min(100, s.n / g * 100), done = s.n >= g, st = streak(), ck = new Set(checkins());
+  const days = []; const d = new Date(dayStart()); d.setDate(d.getDate() - 27);
+  for (let k = 0; k < 28; k++) { const key = localDate(d); const n = dayIds(key).length; days.push(`<i class="h${ck.has(key) ? 4 : n ? Math.min(3, 1 + (n * 3 / g | 0)) : 0}${k === 27 ? ' now' : ''}" title="${key}：${n} 个"></i>`); d.setDate(d.getDate() + 1); }
+  return `<div class="card goal ${done ? 'done' : ''}"><div class="gtop"><div><small>今日任务</small><div class="gnum"><b>${s.n}</b><span>/ ${g}</span></div></div><div class="streak"><span>🔥</span><b>${st}</b><small>连续打卡</small></div></div>
+  <div class="gbar"><i style="width:${pct}%"></i></div><div class="gsub"><span>${done ? '✓ 今日已打卡' : `还差 ${g - s.n} 个完成打卡`}</span><span>新学 ${s.nw} · 复习 ${s.rv}</span></div>
+  <div class="heat" aria-label="最近 4 周">${days.join('')}</div><div class="heatlab"><span>4 周前</span><span>今天</span></div></div>`;
+}
+// ---------- 斩词 ----------
+async function cutWord(it, undoable = true) {
+  it.cut = Date.now(); it.updated = Date.now(); await store.put('items', it); logStudy(it.id); updateBadge();
+  if (undoable) toast(`已斩「${it.text}」，不再复习`, { label: '撤销', run: () => uncut(it, true) });
+}
+async function uncut(it, back) { it.cut = null; it.updated = Date.now(); await store.put('items', it); updateBadge(); toast('已恢复复习'); if (back && route.name === 'session' && sess) { sess.i = Math.max(0, sess.i - 1); if (sess.list[sess.i] !== it.id) sess.list.splice(sess.i, 0, it.id); showCard(); } else if (['book', 'review'].includes(route.name)) go(route.name, null, false); }
+// ---------- 看图：维基百科摘要的缩略图（免 key、支持跨域；国内网络打不开时 3.5 秒后自动退回普通选义） ----------
+const imgMem = new Map();
+function wordImage(text) {
+  const id = text.toLowerCase(); const c = getKV('img:' + id); if (c && (c.url || Date.now() - c.at < 7 * 86400000)) return Promise.resolve(c.url || '');
+  if (imgMem.has(id)) return imgMem.get(id);
+  const pr = (async () => {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3500);
+    try {
+      const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(text.trim().replace(/\s+/g, '_'))}?redirect=true`, { signal: ctl.signal });
+      const j = r.ok ? await r.json() : {}; const url = j.type === 'standard' && j.thumbnail?.source || '';
+      if (r.ok || r.status === 404) setKV('img:' + id, { url, at: Date.now() }); return url;
+    } catch { return ''; } finally { clearTimeout(tm); imgMem.delete(id); }
+  })(); imgMem.set(id, pr); return pr;
+}
 VIEWS.review = () => {
   setTitle('复习');
   const { due, nw } = reviewCounts();
   const mode = getKV('mode', 'en');
-  view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新词</small></div><div><b>${items().filter(i => level(i) === 3).length}</b><small>已掌握</small></div>${todayLine(items(), '个')}</div>
+  view.innerHTML = `${goalCard()}<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新词</small></div><div><b>${items().filter(i => level(i) === 3).length}</b><small>已掌握</small></div></div>
   <div class="sec">练习方式</div><div class="modes">${Object.entries(MODES).map(([k, [a, b]]) => `<button class="mode ${k === mode ? 'on' : ''}" data-m="${k}"><b>${a}</b><small>${b}</small></button>`).join('')}</div>
   <div style="display:grid;gap:10px;margin-top:20px"><button class="btn pri" id="start" style="min-height:58px;font-size:18px" ${due + nw ? '' : 'disabled'}>${due + nw ? `开始复习 ${due + nw} 个（到期 ${due} · 新词 ${nw}）` : '今天没有要复习的 🎉'}</button>
-  ${mem.items.size >= 1 ? `<button class="btn" id="extra">自由练习（随机 20 个）</button>` : ''}</div>
+  ${mem.items.size >= 1 ? `<button class="btn" id="extra">自由练习（随机 20 个，也算进今日任务）</button>` : ''}</div>
   <p class="hint">按艾宾浩斯遗忘曲线（SM-2 算法）安排：记得越牢，下次间隔越长；忘了的 10 分钟后再出现。</p>`;
   view.querySelectorAll('.mode').forEach(b => b.onclick = () => { setKV('mode', b.dataset.m); go('review', null, false); });
   $('#start').onclick = () => startSession([...dueList(), ...newList().slice(0, nw)], true);
-  $('#extra') && ($('#extra').onclick = () => startSession(items().sort(() => Math.random() - .5).slice(0, 20), false));
+  $('#extra') && ($('#extra').onclick = () => startSession(live().sort(() => Math.random() - .5).slice(0, 20), false));
 };
 VIEWS.session = () => {};
 let sess;
@@ -335,7 +393,7 @@ function showCard() {
   if (sess.i >= sess.list.length) return finish();
   const it = mem.items.get(sess.list[sess.i]); if (!it) { sess.i++; return showCard(); }
   const m = sess.mode; const pct = sess.i / sess.list.length * 100;
-  const top = `<div class="fc-top"><div class="progress"><i style="width:${pct}%"></i></div><small>${sess.i + 1}/${sess.list.length}</small></div>`;
+  const top = `<div class="fc-top"><div class="progress"><i style="width:${pct}%"></i></div><small>${sess.i + 1}/${sess.list.length}</small><button class="cutbtn" id="cut" title="已经会了，斩掉不再复习（也可以在卡片上向左滑）">✂︎ 斩</button></div>`;
   const ans = `<div class="ans">${m === 'en' ? '' : `<div class="q" style="font-size:30px">${esc(it.text)}</div>`}<div class="phon">${it.phon ? '/' + esc(it.phon) + '/' : ''}</div><div class="cn-big" style="margin:8px 0">${esc(shortCn(it.cn) || '（暂无释义）')}</div></div>`;
   const grades = () => { const pv = preview(it.srs); return `<div class="grades">${[[0, '忘了'], [3, '模糊'], [4, '记得'], [5, '简单']].map(([g, l]) => `<button class="g${esc(g)}" data-g="${esc(g)}">${l}<small>${sess.graded ? fmtDur(pv[g]) : ''}</small></button>`).join('')}</div>`; };
   const bindGrades = () => view.querySelectorAll('[data-g]').forEach(b => b.onclick = () => grade(it, +b.dataset.g));
@@ -343,10 +401,13 @@ function showCard() {
     view.innerHTML = top + `<div class="card flash" id="fc">${m === 'en' ? `<div class="q">${esc(it.text)}</div><button class="btn sm" id="pl">${ICON.spk} 再听</button>` : `<div class="qcn">${esc(shortCn(it.cn) || it.text)}</div>`}<div id="ansbox"></div><button class="btn pri" id="show" style="margin-top:16px;min-width:180px">显示答案</button></div><div id="gb"></div>`;
     if (m === 'en') { speak(it.text); $('#pl').onclick = e => { e.stopPropagation(); speak(it.text); }; }
     $('#show').onclick = () => { $('#show').remove(); $('#ansbox').innerHTML = ans; if (m === 'cn') speak(it.text); $('#gb').innerHTML = grades(); bindGrades(); };
-  } else if (m === 'listen') {
+  } else if (m === 'listen' || m === 'pic') {
     const opts = [it, ...distractors(it)].sort(() => Math.random() - .5);
-    view.innerHTML = top + `<div class="card flash"><button class="bigplay" id="pl" aria-label="播放">${ICON.spk}</button><small class="hint">听发音，选出正确意思</small><div class="opts">${opts.map((o, k) => `<button class="opt" data-k="${k}">${esc(shortCn(o.cn))}</button>`).join('')}</div><div id="ansbox"></div></div><div id="gb"></div>`;
+    view.innerHTML = top + `<div class="card flash" id="fc">${m === 'pic' ? `<div class="picbox" id="pic"><span class="spin"></span></div><div class="picword"><b>${esc(it.text)}</b><button class="btn sm" id="pl" aria-label="播放">${ICON.spk}</button></div><small class="hint" id="pich">看图片和单词，选出正确意思</small>` : `<button class="bigplay" id="pl" aria-label="播放">${ICON.spk}</button><small class="hint">听发音，选出正确意思</small>`}<div class="opts">${opts.map((o, k) => `<button class="opt" data-k="${k}">${esc(shortCn(o.cn))}</button>`).join('')}</div><div id="ansbox"></div></div><div id="gb"></div>`;
     speak(it.text); $('#pl').onclick = () => speak(it.text);
+    if (m === 'pic') { const cur = sess.i; wordImage(it.text).then(url => { if (sess.i !== cur || !$('#pic')) return; const box = $('#pic'); const none = () => { box.classList.add('none'); box.innerHTML = '<span>🖼️</span><small>这个词没找到合适的图片</small>'; $('#pich').textContent = '看单词，选出正确意思'; };
+      if (!url) return none(); const img = new Image(); img.alt = it.text; img.onload = () => { if (sess.i === cur) { box.innerHTML = ''; box.append(img); box.classList.add('ok'); } }; img.onerror = none; img.referrerPolicy = 'no-referrer'; img.src = url; });
+      for (const id of sess.list.slice(sess.i + 1, sess.i + 4)) { const n = mem.items.get(id); n && wordImage(n.text); } }
     view.querySelectorAll('.opt').forEach(b => b.onclick = () => {
       if (view.querySelector('.opt.ok')) return; const ok = opts[+b.dataset.k] === it;
       view.querySelectorAll('.opt').forEach((x, k) => { if (opts[k] === it) x.classList.add('ok'); }); if (!ok) b.classList.add('no');
@@ -360,6 +421,15 @@ function showCard() {
     $('#chk').onclick = () => check(false); $('#skip').onclick = () => check(true); $('#sp').onkeydown = e => e.key === 'Enter' && check(false);
     setTimeout(() => $('#sp')?.focus(), 50);
   }
+  bindCut(it);
+}
+function bindCut(it) {
+  const doCut = () => { sess.list = sess.list.filter((id, k) => k <= sess.i || id !== it.id); sess.right++; sess.i++; cutWord(it); showCard(); };
+  $('#cut').onclick = doCut;
+  const fc = view.querySelector('.flash'); if (!fc) return; let x0 = null, y0 = 0;
+  fc.addEventListener('touchstart', e => { if (e.target.closest('input,button')) { x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  fc.addEventListener('touchmove', e => { if (x0 == null) return; const dx = e.touches[0].clientX - x0; if (dx < 0 && Math.abs(e.touches[0].clientY - y0) < 50) { fc.style.transform = `translateX(${dx * .6}px) rotate(${dx / 60}deg)`; fc.classList.toggle('cutting', dx < -90); } }, { passive: true });
+  fc.addEventListener('touchend', e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = Math.abs(e.changedTouches[0].clientY - y0); x0 = null; fc.style.transform = ''; fc.classList.remove('cutting'); if (dx < -90 && dy < 50) { fc.classList.add('cutaway'); setTimeout(doCut, 180); } }, { passive: true });
 }
 function autoNext(it, ok) { $('#gb').innerHTML = `<button class="btn pri" id="nx" style="width:100%;margin-top:14px;min-height:54px">${ok ? '✓ 答对了，下一个' : '✗ 记下了，下一个'}</button>`; $('#nx').onclick = () => grade(it, ok ? 4 : 0); }
 async function grade(it, g) {
@@ -367,6 +437,7 @@ async function grade(it, g) {
     const first = !it.srs || !it.srs.firstAt; it.srs = review(it.srs || newSrs(), g); if (first) it.srs.firstAt = Date.now();
     it.updated = Date.now(); store.put('items', it);
   }
+  logStudy(it.id); // 自由练习只记入「今日已学」，不改复习排期（避免随机抽查打乱遗忘曲线）
   if (g >= 3) sess.right++; else if (sess.graded) sess.list.push(it.id); // 忘了的本轮末尾再来
   sess.i++; showCard(); updateBadge();
 }
@@ -382,7 +453,7 @@ VIEWS.settings = () => {
     <label><span>语速 <small id="rv">${getKV('rate', 1)}×</small></span><input type="range" id="rate" min="0.6" max="1.3" step="0.1" value="${getKV('rate', 1)}"></label>
     ${vs.length ? `<label><span>系统语音</span><select id="voice"><option value="">自动选择</option>${vs.map(v => `<option ${getKV('voice') === v.name ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>` : ''}
     <div><span>试听</span><button class="btn sm" id="test">government leakage</button></div></div>
-  <div class="sec">学习</div><div class="card set"><label><span>每天新词数量</span><select id="npd">${[10, 20, 30, 50, 100].map(n => `<option ${getKV('newPerDay', 20) == n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+  <div class="sec">学习</div><div class="card set"><label><span>每日任务<small>每天学够这么多个词自动打卡（复习、新词、自由练习、斩词都算）</small></span><select id="goal">${[...new Set([10, 20, 30, 50, 100, goal()])].sort((a, b) => a - b).map(n => `<option value="${n}" ${goal() === n ? 'selected' : ''}>${n} 个</option>`).join('')}<option value="c">自定义…</option></select></label><label><span>每天新词数量</span><select id="npd">${[10, 20, 30, 50, 100].map(n => `<option ${getKV('newPerDay', 20) == n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
     <div><span>外观</span>${seg('theme', [['auto', '跟随系统'], ['light', '浅色'], ['dark', '深色']], 'auto')}</div></div>
   <div class="sec">手机 ⇄ 平板 同步</div><div class="card set">
     <div><span>隔空投送 / 文件<small>导出后用「隔空投送」发到另一台设备，那边点「导入文件」合并</small></span><button class="btn sm" id="exp">导出</button><button class="btn sm" id="imp">导入文件</button></div>
@@ -394,6 +465,7 @@ VIEWS.settings = () => {
   view.querySelectorAll('.seg').forEach(s => s.onclick = e => { const b = e.target.closest('button'); if (!b) return; setKV(s.dataset.k, b.dataset.v); s.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); if (s.dataset.k === 'theme') applyTheme(); });
   $('#rate').oninput = e => { setKV('rate', +e.target.value); $('#rv').textContent = e.target.value + '×'; };
   $('#voice') && ($('#voice').onchange = e => setKV('voice', e.target.value));
+  $('#goal').onchange = e => { let v = e.target.value; if (v === 'c') { v = parseInt(prompt('每天要学多少个词？（1–500）', goal()), 10); if (!(v >= 1 && v <= 500)) return go('settings', null, false); } setKV('goal', +v); toast(`每日任务：${v} 个`); go('settings', null, false); };
   $('#npd').onchange = e => { setKV('newPerDay', +e.target.value); updateBadge(); };
   $('#test').onclick = () => speak('government leakage');
   $('#exp').onclick = exportFile; $('#imp').onclick = () => $('#fileJson').click();
@@ -578,5 +650,5 @@ window.addEventListener('vocab-storage-error', () => toast(store.storageWarning)
   if (packName != null) openPack(packName);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   autoGist(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { updateBadge(); autoGist(); } });
-  window.__app = { studiedToday, laws, importLaws, store, mem, parseText, translate, speak, review, sync, go, importText };
+  window.__app = { wordsToday, streak, goal, wordImage, cutWord, dayKey, studiedToday, laws, importLaws, store, mem, parseText, translate, speak, review, sync, go, importText };
 })();

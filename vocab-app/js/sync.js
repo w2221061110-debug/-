@@ -5,7 +5,7 @@ export function snapshot({ thumbs = true } = {}) {
     app: 'vocab-app', v: 1, at: Date.now(),
     items: [...mem.items.values()],
     pages: [...mem.pages.values()].map(p => thumbs ? p : { ...p, thumb: '' }),
-    kv: [...mem.kv.values()].filter(k => !String(k.id).startsWith('tr:') && !['gistToken'].includes(k.id)),
+    kv: [...mem.kv.values()].filter(k => !/^(tr|img):/.test(String(k.id)) && !['gistToken'].includes(k.id)),
   };
 }
 /** 合并：同 id 以 updated 新者为准；复习记录取复习次数多/更晚的 */
@@ -28,6 +28,9 @@ export async function merge(data) {
       if (pages.length !== (cur.pages || []).length || newer) { rec.pages = pages; await put(store, rec); res.items.updated++; }
       continue;
     }
+    // 每日学习记录 / 打卡：两台设备取并集，不互相覆盖
+    if (store === 'kv' && /^day:/.test(r.id) && Array.isArray(r.v?.ids)) { const ids = [...new Set([...(cur.v?.ids || []), ...r.v.ids])]; if (ids.length !== (cur.v?.ids || []).length) { await put('kv', { id: r.id, v: { ids }, updated: Date.now() }); res.kv.updated++; } continue; }
+    if (store === 'kv' && r.id === 'checkins' && Array.isArray(r.v)) { const v = [...new Set([...(cur.v || []), ...r.v])].sort(); if (v.length !== (cur.v || []).length) { await put('kv', { id: 'checkins', v, updated: Date.now() }); res.kv.updated++; } continue; }
     if ((r.updated || 0) > (cur.updated || 0)) { if (store === 'pages' && !r.thumb) r.thumb = cur.thumb; await put(store, r); res[store].updated++; }
   }
   // 兼容旧调用
@@ -51,10 +54,10 @@ export async function fromB64(b64) {
 }
 // 二维码只放精简数据（单词+释义+复习进度），不含图片
 export function compact() {
-  return { app: 'vocab-app', v: 1, at: Date.now(), c: 1, items: [...mem.items.values()].map(i => [i.text, i.cn || '', i.srs ? [i.srs.reps, Math.round(i.srs.ease * 100), i.srs.interval, Math.round(i.srs.due / 60000), i.srs.lapses, i.srs.firstAt || 0, i.srs.last || 0] : 0, i.updated, i.page || '']) };
+  return { app: 'vocab-app', v: 1, at: Date.now(), c: 1, items: [...mem.items.values()].map(i => [i.text, i.cn || '', i.srs ? [i.srs.reps, Math.round(i.srs.ease * 100), i.srs.interval, Math.round(i.srs.due / 60000), i.srs.lapses, i.srs.firstAt || 0, i.srs.last || 0] : 0, i.updated, i.page || '', i.cut || 0]) };
 }
 export function expand(c) {
-  return { app: 'vocab-app', v: 1, items: c.items.map(([text, cn, s, updated, page]) => ({ id: text.toLowerCase(), text, cn, page, pages: page ? [page] : [], updated, created: updated, srs: s ? { reps: s[0], ease: s[1] / 100, interval: s[2], due: s[3] * 60000, lapses: s[4], firstAt: s[5] || 0, last: s[6] || 0 } : null })) };
+  return { app: 'vocab-app', v: 1, items: c.items.map(([text, cn, s, updated, page, cut]) => ({ id: text.toLowerCase(), text, cn, page, cut: cut || null, pages: page ? [page] : [], updated, created: updated, srs: s ? { reps: s[0], ease: s[1] / 100, interval: s[2], due: s[3] * 60000, lapses: s[4], firstAt: s[5] || 0, last: s[6] || 0 } : null })) };
 }
 // ---- Gist ----
 const API = 'https://api.github.com/gists';

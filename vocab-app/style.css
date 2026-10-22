@@ -173,3 +173,39 @@ body.sheet-open .toast{bottom:auto;top:calc(64px + env(safe-area-inset-top))}
 .stats .todayline{grid-column:1/-1;display:flex;align-items:baseline;justify-content:center;flex-wrap:wrap;gap:4px 6px;padding:10px 6px 2px;border-top:1px dashed var(--line);font-size:14px;color:var(--sub)}
 .stats .todayline b{display:inline;font:700 22px/1 var(--en);color:var(--acc2)}
 .stats .todayline small{flex-basis:auto;margin-left:6px;padding:2px 9px;border-radius:999px;background:var(--accs);color:var(--acc);font-size:12px}
+
+/* 每日任务 / 打卡 */
+.goal{margin-bottom:12px;padding:18px 18px 14px;background:linear-gradient(135deg,var(--card),color-mix(in srgb,var(--accs) 70%,var(--card)))}
+.goal .gtop{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+.goal small{color:var(--sub);font-size:13px}
+.gnum{display:flex;align-items:baseline;gap:6px}.gnum b{font:700 46px/1 var(--en);color:var(--acc)}.gnum span{font:600 20px var(--en);color:var(--sub)}
+.streak{display:grid;justify-items:center;padding:8px 14px;border-radius:16px;background:var(--card);border:1px solid var(--line);min-width:84px}
+.streak span{font-size:20px;line-height:1}.streak b{font:700 24px/1.1 var(--en);color:var(--acc2)}.streak small{font-size:11px}
+.gbar{height:12px;border-radius:6px;background:var(--line);overflow:hidden;margin:14px 0 8px}
+.gbar i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--acc),color-mix(in srgb,var(--acc) 60%,var(--acc2)));transition:width .5s}
+.goal.done .gbar i{background:linear-gradient(90deg,var(--good),var(--acc2))}
+.gsub{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--sub);flex-wrap:wrap}.goal.done .gsub span:first-child{color:var(--good);font-weight:600}
+.heat{display:grid;grid-template-columns:repeat(14,1fr);gap:4px;margin-top:14px}
+.heat i{aspect-ratio:1;border-radius:4px;background:var(--line)}.heat .h1{background:color-mix(in srgb,var(--acc) 25%,var(--line))}.heat .h2{background:color-mix(in srgb,var(--acc) 50%,var(--line))}.heat .h3{background:color-mix(in srgb,var(--acc) 75%,var(--line))}.heat .h4{background:var(--acc2)}
+.heat .now{outline:2px solid var(--acc);outline-offset:1px}
+.heatlab{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-top:4px}
+@media (min-width:760px){.heat{grid-template-columns:repeat(28,1fr)}}
+.celebrate{position:fixed;inset:0;z-index:40;display:grid;place-items:center;background:rgba(10,14,12,.38);animation:fade .2s;overflow:hidden}
+.celebrate.fadeout{opacity:0;transition:opacity .45s}
+.cbox{background:var(--card);border-radius:26px;padding:28px 34px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:pop .45s cubic-bezier(.2,1.4,.4,1)}
+.cbox .e{font-size:58px}.cbox h2{margin:6px 0}.cbox p{color:var(--sub);margin:0 0 10px}.cbox .fire{font-size:18px;margin-bottom:16px}.cbox .fire b{color:var(--acc2);font:700 26px var(--en)}
+.celebrate i{position:absolute;top:-12px;width:9px;height:14px;border-radius:2px;animation:fall 1.8s ease-in forwards}
+@keyframes fall{to{transform:translateY(110vh) rotate(540deg)}}@keyframes pop{from{transform:scale(.6);opacity:0}}
+/* 斩词 */
+.cutbtn{flex:none;padding:5px 12px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bad) 40%,var(--line));color:var(--bad);font-weight:700;font-size:14px;background:var(--card)}
+.flash{transition:transform .18s,opacity .18s}.flash.cutting{box-shadow:0 0 0 3px var(--bad) inset}.flash.cutaway{transform:translateX(-120%) rotate(-12deg)!important;opacity:0}
+.playrow .btn.cutb{flex:.7;color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.lvl.cut{background:var(--bad);border-radius:2px;transform:rotate(45deg)}
+/* 看图选义 */
+.picbox{width:min(100%,320px);aspect-ratio:4/3;border-radius:18px;background:var(--bg);border:1px solid var(--line);display:grid;place-items:center;overflow:hidden}
+.picbox img{width:100%;height:100%;object-fit:cover;animation:fade .3s}
+.picbox.none{align-content:center;gap:4px;color:var(--sub)}.picbox.none span{font-size:40px}
+.picword{display:flex;align-items:center;gap:10px}.picword b{font:700 clamp(26px,7vw,36px)/1.2 var(--en);word-break:break-word}
+.spin{width:30px;height:30px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--acc);animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+@media (min-width:760px){.modes{grid-template-columns:repeat(5,1fr)}}
+@media (max-width:759px){.modes>.mode:last-child:nth-child(odd){grid-column:1/-1}}
