@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>风里的小羊 · Flow v3</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#2f5a3a;touch-action:none;-webkit-user-select:none;user-select:none;font-family:-apple-system,"PingFang SC",sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;-webkit-touch-callout:none}
+#hint{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 82px);transform:translateX(-50%);color:#fffbea;font-size:13px;letter-spacing:.1em;padding:7px 14px;border-radius:20px;background:rgba(30,50,30,.28);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transition:opacity 1.2s;pointer-events:none;white-space:nowrap}
+#hint.off{opacity:0}
+#bar{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 22px);transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:999px;background:rgba(28,44,30,.38);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 4px 18px rgba(0,0,0,.18)}
+#bar button{width:34px;height:34px;border:0;border-radius:50%;background:rgba(255,250,235,.14);display:grid;place-items:center;cursor:pointer;padding:0;transition:transform .15s,background .2s}
+#bar button:active{transform:scale(.88)}
+#bar svg{width:19px;height:19px;fill:none;stroke:#fff8e6;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#sound svg path:first-child{fill:#fff8e6}
+#sound .x{display:none}#sound.muted .x{display:inline}#sound.muted .w{display:none}
+#gust.on{background:rgba(255,190,205,.45)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:min(42vw,180px);height:4px;border-radius:2px;background:linear-gradient(90deg,#f7b6c8 var(--p,45%),rgba(255,248,230,.35) var(--p,45%));outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#fffaf0;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radius:50%;background:#fffaf0}
+#ground,#gl{pointer-events:none}
+
+</style>
+</head>
+<body>
+<canvas id="ground"></canvas>
+<canvas id="gl"></canvas>
+<canvas id="c"></canvas>
+<div id="hint">拖着小羊滑 · 点草地它会跑过去</div>
+<div id="bar">
+  <button id="gust" aria-label="来一阵风" title="来一阵风">
+    <svg viewBox="0 0 24 24"><path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/></svg>
+  </button>
+  <input id="wind" type="range" min="0" max="1" step="0.01" value="0.45" aria-label="风力">
+  <button id="sound" aria-label="声音" title="声音">
+    <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path class="w" d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/><path class="x" d="M16 9l5 6M21 9l-5 6"/></svg>
+  </button>
+</div>
+<script>
+// Wind field: global strength + travelling gust bands + pointer impulses.
+(function () {
+  // small value-noise
+  const P = new Uint8Array(512);
+  for (let i = 0; i < 256; i++) P[i] = i;
+  let s = 7;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 255; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; [P[i], P[j]] = [P[j], P[i]]; }
+  for (let i = 0; i < 256; i++) P[i + 256] = P[i];
+  const fade = t => t * t * (3 - 2 * t);
+  function noise2(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const a = P[(P[xi & 255] + yi) & 511], b = P[(P[(xi + 1) & 255] + yi) & 511];
+    const c = P[(P[xi & 255] + yi + 1) & 511], d = P[(P[(xi + 1) & 255] + yi + 1) & 511];
+    const u = fade(xf), v = fade(yf);
+    return ((a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v) / 255; // 0..1
+  }
+
+  const Wind = {
+    noise2,
+    strength: 0.45,      // slider 0..1
+    gustBoost: 0, gustHold: 0,        // button-triggered global gust 0..1, decays
+    angle: 0.35,         // base direction (rad), slowly wanders
+    t: 0,
+    impulses: [],        // {x,y,dx,dy,r,life}
+    // grass parting around the moving lamb: the lamb itself + a short wake of points that spring back
+    lambPart: null, trail: [],   // {x,y,R,k}
+    part(x, y) {
+      let px = 0, py = 0, pg = 0;
+      const add = (cx, cy, R, k) => {
+        if (k > -0.01 && k < 0.01) return;
+        const dx = x - cx, dy = y - cy, lim = R * 2.3;
+        if (dx > lim || dx < -lim || dy > lim || dy < -lim) return;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1, q = (d - R * 0.75) / (R * 0.6), f = Math.exp(-q * q) * k;
+        px += dx / d * f; py += dy / d * f; pg += Math.abs(f);
+      };
+      const L = this.lambPart; if (L) add(L.x, L.y, L.R, L.k);
+      for (const p of this.trail) add(p.x, p.y, p.R, p.k);
+      return [px, py, pg];
+    },
+    update(dt) {
+      this.t += dt;
+      this.angle = 0.35 + (noise2(this.t * 0.05, 3.1) - 0.5) * 0.9;
+      // gust button: ease in over ~0.4s, hold briefly, then decay (no instant jump)
+      if (this.gustHold > 0) { this.gustHold -= dt; this.gustBoost += (1 - this.gustBoost) * Math.min(1, dt * 3.5); }
+      else this.gustBoost = Math.max(0, this.gustBoost - dt * 0.3);
+      for (const im of this.impulses) { im.life -= dt; im.r += dt * 260; im.x += im.dx * dt * 160; im.y += im.dy * dt * 160; }
+      this.impulses = this.impulses.filter(i => i.life > 0);
+    },
+    poke(x, y, dx, dy, power) {
+      const l = Math.hypot(dx, dy) || 1;
+      if (this.impulses.length > 24) this.impulses.shift();
+      this.impulses.push({ x, y, dx: dx / l, dy: dy / l, r: 30, life: 1.4, p: power });
+    },
+    // returns [vx, vy, gustAmount]; units: 0..~1.6
+    at(x, y) {
+      const t = this.t, ca = Math.cos(this.angle), sa = Math.sin(this.angle);
+      const along = x * ca + y * sa, across = -x * sa + y * ca;
+      const S = this.strength + this.gustBoost * 0.8;
+      // gust bands travel along the wind direction; speed grows with strength
+      const speed = 90 + S * 260;
+      const band = noise2((along - t * speed) * 0.0042, across * 0.0025 + t * 0.05);
+      const band2 = noise2((along - t * speed * 1.3) * 0.011, across * 0.008);
+      let g = Math.max(0, band * 1.5 - 0.45) + band2 * 0.25;
+      g = g * g;
+      // slow resting swell: visible light bands that travel even at low wind
+      const rest = noise2((along - t * (45 + S * 60)) * 0.0024, across * 0.0016 + 7.3);
+      const rb = Math.max(0, rest * 1.8 - 0.85);
+      const m = S * (0.25 + 1.25 * g) + 0.03 + rb * 0.12;
+      let vx = ca * m, vy = sa * m;
+      for (const im of this.impulses) {
+        const d = Math.hypot(x - im.x, y - im.y), w = 70;
+        const k = Math.exp(-((d - im.r) * (d - im.r)) / (w * w)) * im.life * im.p;
+        if (k > 0.01) { vx += im.dx * k; vy += im.dy * k; g += k * 0.6; }
+      }
+      return [vx, vy, Math.min(1.5, g * (0.4 + S) + rb * 0.42)];
+    }
+  };
+  window.Wind = Wind;
+})();
+
+</script>
+<script>
+// Procedural audio: wind (rumble + whistle) + leaf/grass rustle + synthesized "baa".
+// The same graph builder drives the live AudioContext and an OfflineAudioContext render (for video export).
+(function () {
+  function noiseBuf(ctx, sec, pink) {
+    const len = ctx.sampleRate * sec, buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch); let b0 = 0, b1 = 0, b2 = 0;
+      for (let i = 0; i < len; i++) {
+        const w = Math.random() * 2 - 1;
+        if (!pink) { d[i] = w * 0.5; continue; }
+        b0 = 0.997 * b0 + w * 0.029; b1 = 0.985 * b1 + w * 0.032; b2 = 0.95 * b2 + w * 0.048;
+        d[i] = (b0 + b1 + b2 + w * 0.02) * 0.9;
+      }
+    }
+    return buf;
+  }
+  function buildGraph(ctx, dest) {
+    const N = { ctx };
+    N.master = ctx.createGain(); N.master.connect(dest);
+    N.bus = ctx.createGain(); N.bus.connect(N.master);   // wind/rustle bus, ducked under the bleat
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf(ctx, 4, true); src.loop = true;
+    N.low = ctx.createBiquadFilter(); N.low.type = 'lowpass'; N.low.frequency.value = 400;
+    N.band = ctx.createBiquadFilter(); N.band.type = 'bandpass'; N.band.frequency.value = 700; N.band.Q.value = 6;
+    N.lowG = ctx.createGain(); N.bandG = ctx.createGain(); N.lowG.gain.value = 0; N.bandG.gain.value = 0;
+    src.connect(N.low).connect(N.lowG).connect(N.bus);
+    src.connect(N.band).connect(N.bandG).connect(N.bus);
+    const rs = ctx.createBufferSource(); rs.buffer = noiseBuf(ctx, 3, false); rs.loop = true;
+    N.hp = ctx.createBiquadFilter(); N.hp.type = 'highpass'; N.hp.frequency.value = 2500;
+    N.pk = ctx.createBiquadFilter(); N.pk.type = 'peaking'; N.pk.frequency.value = 5000; N.pk.gain.value = 6;
+    N.rustG = ctx.createGain(); N.rustG.gain.value = 0;
+    rs.connect(N.hp).connect(N.pk).connect(N.rustG).connect(N.bus);
+    N.stepBuf = noiseBuf(ctx, 0.2, false);
+    src.start(0); rs.start(0);
+    return N;
+  }
+  function setLevel(N, level, gust, t) {
+    const L = Math.min(1.4, level);
+    N.lowG.gain.setTargetAtTime(0.15 + L * 0.9, t, 0.25);
+    N.low.frequency.setTargetAtTime(250 + L * 900, t, 0.3);
+    N.bandG.gain.setTargetAtTime(L * L * 0.3, t, 0.3);
+    N.band.frequency.setTargetAtTime(450 + L * 900, t, 0.4);
+    const flick = 0.5 + Math.random() * 0.5;
+    N.rustG.gain.setTargetAtTime(Math.min(0.25, (gust || 0) * 0.16 * flick + L * 0.02), t, 0.05);
+  }
+  // soft lamb bleat: sawtooth through formants with vibrato and a falling pitch
+  function bleat(N, t) {
+    const ctx = N.ctx, o = ctx.createOscillator(); o.type = 'sawtooth';
+    const f0 = 470 + Math.random() * 80;
+    o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 1.08, t + 0.12); o.frequency.exponentialRampToValueAtTime(f0 * 0.82, t + 0.75);
+    const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 7.5; lg.gain.value = 14; lfo.connect(lg).connect(o.frequency);
+    const env = ctx.createGain(); env.gain.setValueAtTime(0, t); env.gain.linearRampToValueAtTime(0.8, t + 0.06); env.gain.setTargetAtTime(0, t + 0.5, 0.12);
+    for (const [f, q, g] of [[900, 5, 1], [1700, 7, 0.6], [2700, 8, 0.25]]) {
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+      const gg = ctx.createGain(); gg.gain.value = g; o.connect(bp).connect(gg).connect(env);
+    }
+    env.connect(N.master);
+    N.bus.gain.cancelScheduledValues(t); N.bus.gain.setTargetAtTime(0.3, t, 0.04); N.bus.gain.setTargetAtTime(1, t + 0.75, 0.2);
+    o.start(t); lfo.start(t); o.stop(t + 1.1); lfo.stop(t + 1.1);
+  }
+
+  // soft footstep rustle: a short band-passed noise tick (grass brushing the legs)
+  function step(N, t, amt) {
+    const ctx = N.ctx, b = ctx.createBufferSource(); b.buffer = N.stepBuf;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2200 + Math.random() * 1600; bp.Q.value = 0.9;
+    const env = ctx.createGain(); env.gain.setValueAtTime(0, t); env.gain.linearRampToValueAtTime(0.07 + 0.09 * Math.min(1, amt), t + 0.015); env.gain.setTargetAtTime(0, t + 0.03, 0.035);
+    b.connect(bp).connect(env).connect(N.master);
+    b.start(t, Math.random() * 0.05, 0.15);
+  }
+  const A = { ctx: null, on: true, N: null, log: null };
+  A.start = function () {
+    if (A.ctx) { A.ctx.resume(); return; }
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    A.ctx = new C(); A.N = buildGraph(A.ctx, A.ctx.destination); A.N.master.gain.value = A.on ? 1 : 0;
+  };
+  A.setOn = function (v) { A.on = v; if (A.N) A.N.master.gain.setTargetAtTime(v ? 1 : 0, A.ctx.currentTime, 0.15); };
+  // simTime: scene clock in seconds; when A.log is an array, events are recorded for offline export
+  A.update = function (level, gust, simTime) {
+    if (A.log) A.log.push(['l', simTime, level, gust]);
+    if (A.N) setLevel(A.N, level, gust, A.ctx.currentTime);
+  };
+  A.baa = function (simTime) {
+    if (A.log) A.log.push(['b', simTime]);
+    if (A.N) bleat(A.N, A.ctx.currentTime);
+  };
+  A.step = function (simTime, amt) {
+    if (A.log) A.log.push(['s', simTime, amt]);
+    if (A.N && A.on) step(A.N, A.ctx.currentTime, amt);
+  };
+  // Render a recorded log offline; returns a base64 16-bit stereo WAV.
+  A.renderOffline = async function (log, duration, rate = 48000) {
+    const ctx = new OfflineAudioContext(2, Math.ceil(duration * rate), rate);
+    const N = buildGraph(ctx, ctx.destination); N.master.gain.value = 1;
+    let last = -1;
+    for (const e of log) {
+      if (e[0] === 'b') bleat(N, e[1]);
+      else if (e[0] === 's') step(N, e[1], e[2]);
+      else if (e[1] - last >= 1 / 30 - 1e-6) { setLevel(N, e[2], e[3], e[1]); last = e[1]; }
+    }
+    const buf = await ctx.startRendering();
+    const L = buf.getChannelData(0), R = buf.getChannelData(1), n = L.length;
+    let peak = 1e-6; for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i]));
+    const k = Math.min(1, 0.89 / peak);
+    const out = new DataView(new ArrayBuffer(44 + n * 4));
+    const w = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+    w(0, 'RIFF'); out.setUint32(4, 36 + n * 4, true); w(8, 'WAVEfmt '); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 2, true);
+    out.setUint32(24, rate, true); out.setUint32(28, rate * 4, true); out.setUint16(32, 4, true); out.setUint16(34, 16, true); w(36, 'data'); out.setUint32(40, n * 4, true);
+    for (let i = 0; i < n; i++) { out.setInt16(44 + i * 4, Math.max(-1, Math.min(1, L[i] * k)) * 32767, true); out.setInt16(46 + i * 4, Math.max(-1, Math.min(1, R[i] * k)) * 32767, true); }
+    const bytes = new Uint8Array(out.buffer); let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  };
+  window.WindAudio = A;
+})();
+
+</script>
+<script>
+// WebGL2 instanced grass: one quad per blade, bristle sprite atlas, wind from a CPU-sampled grid texture.
+(function () {
+  const VS = `#version 300 es
+in vec2 aCorner; in vec2 iPos; in vec4 iP; in vec3 iQ;   // iP: len,width,rest,phase  iQ: layer,variant,curl
+uniform vec2 uView; uniform float uTime, uQuality, uCell; uniform vec2 uGrid; uniform sampler2D uWind;
+out vec2 vUv; out float vGust; flat out int vLayer;
+float hash(float n){ return fract(sin(n) * 43758.5453); }
+void main(){
+  if (hash(float(gl_InstanceID) * 0.7311 + 0.17) > uQuality) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec3 w = texture(uWind, (iPos / uCell + 0.5) / uGrid).xyz;
+  vec2 v = (w.xy * 2.0 - 1.0) * 2.0; float g = w.z * 1.5;
+  float m = min(1.4, length(v)), k = min(1.0, m * 1.4);
+  float fl = sin(uTime * 4.0 + iP.w) * (0.06 + m * 0.08);   // fixed frequency: no phase jumps when wind changes
+  float wa = atan(v.y, v.x) + fl + iQ.z * 0.3;
+  vec2 d = vec2(cos(iP.z), sin(iP.z)) * (1.0 - k) * 0.8 + vec2(cos(wa), sin(wa)) * k;
+  float len = iP.x * min(1.25, 0.6 + length(d) * 0.5);   // capped stretch
+  vec2 dir = normalize(d + 1e-5), nrm = vec2(-dir.y, dir.x);
+  float u = aCorner.x;
+  vec2 p = iPos + dir * u * len + nrm * (aCorner.y * iP.y + (iQ.z * 0.35 + 0.25 * k * sign(iQ.z + 0.001)) * len * u * (1.0 - u));
+  gl_Position = vec4(p / uView * 2.0 - 1.0, 0.0, 1.0); gl_Position.y = -gl_Position.y;
+  vUv = vec2(u, ((aCorner.y + 0.5) * 0.9 + 0.05 + iQ.y) / 3.0);
+  vGust = g; vLayer = int(iQ.x + 0.5);
+}`;
+  const FS = `#version 300 es
+precision mediump float;
+in vec2 vUv; in float vGust; flat in int vLayer;
+uniform sampler2D uAtlas; uniform vec3 uBase[5]; uniform vec3 uHi[5];
+out vec4 o;
+void main(){
+  vec4 t = texture(uAtlas, vUv);
+  vec3 c = mix(uBase[vLayer], uHi[vLayer], smoothstep(0.08, 1.1, vGust));
+  c *= t.rgb / 0.84;
+  o = vec4(c * t.a, t.a);
+}`;
+  const G = { ok: false };
+  let wf = null, gl, prog, vao, inst, count = 0, windTex, atlasTex, U = {}, gw = 0, gh = 0, cell = 16, wbuf, view = [1, 1];
+
+  function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+
+  G.init = function (canvas, atlasCanvas, palette) {
+    try {
+      gl = canvas.getContext('webgl2', { premultipliedAlpha: true, antialias: false, alpha: true });
+      if (!gl) return false;
+      prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      for (const n of ['uView', 'uTime', 'uQuality', 'uCell', 'uGrid', 'uWind', 'uAtlas', 'uBase', 'uHi']) U[n] = gl.getUniformLocation(prog, n);
+      gl.uniform3fv(U.uBase, palette.flatMap(l => hex(l[0])));
+      gl.uniform3fv(U.uHi, palette.flatMap(l => hex(l[2])));
+      vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+      const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, -0.5, 1, -0.5, 0, 0.5, 1, 0.5]), gl.STATIC_DRAW);
+      const aC = gl.getAttribLocation(prog, 'aCorner'); gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 2, gl.FLOAT, false, 0, 0);
+      inst = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, inst);
+      const st = 9 * 4;
+      for (const [n, sz, off] of [['iPos', 2, 0], ['iP', 4, 2], ['iQ', 3, 6]]) {
+        const l = gl.getAttribLocation(prog, n); gl.enableVertexAttribArray(l);
+        gl.vertexAttribPointer(l, sz, gl.FLOAT, false, st, off * 4); gl.vertexAttribDivisor(l, 1);
+      }
+      atlasTex = gl.createTexture(); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasCanvas);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      windTex = gl.createTexture(); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, windTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.uniform1i(U.uWind, 0); gl.uniform1i(U.uAtlas, 1);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      G.ok = true; return true;
+    } catch (e) { console.warn('WebGL grass disabled:', e.message); G.ok = false; return false; }
+  };
+
+  // blades: [{x,y,len,width,ra,ph,layer,v,curl}] already sorted back->front
+  G.build = function (blades, w, h, dpr) {
+    const c = gl.canvas; c.width = w * dpr; c.height = h * dpr; gl.viewport(0, 0, c.width, c.height);
+    view = [w, h];
+    const a = new Float32Array(blades.length * 9);
+    blades.forEach((b, i) => a.set([b.x, b.y, b.len, b.width, b.ra, b.ph, b.layer, b.v, b.curl], i * 9));
+    gl.bindBuffer(gl.ARRAY_BUFFER, inst); gl.bufferData(gl.ARRAY_BUFFER, a, gl.STATIC_DRAW);
+    count = blades.length;
+    cell = Math.max(14, Math.round(Math.max(w, h) / 70));
+    gw = Math.ceil(w / cell) + 2; gh = Math.ceil(h / cell) + 2; wbuf = new Uint8Array(gw * gh * 4); wf = null;
+  };
+
+  G.draw = function (t, quality, dt = 1 / 60) {
+    const W = window.Wind, a = wf ? 1 - Math.exp(-dt * 7) : 1;   // ease wind changes (no per-frame jumps)
+    if (!wf) wf = new Float32Array(gw * gh * 3);
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+      const s = W.at(i * cell, j * cell), o = (j * gw + i) * 4, q = (j * gw + i) * 3;
+      wf[q] += (s[0] - wf[q]) * a; wf[q + 1] += (s[1] - wf[q + 1]) * a; wf[q + 2] += (s[2] - wf[q + 2]) * a;
+      const pp = W.part(i * cell, j * cell);   // parting is added after the ease so it tracks the lamb without lag
+      const vx = wf[q] + pp[0], vy = wf[q + 1] + pp[1], g = wf[q + 2] + Math.min(0.6, pp[2] * 0.45);
+      wbuf[o] = Math.max(0, Math.min(255, (vx / 4 + 0.5) * 255)); wbuf[o + 1] = Math.max(0, Math.min(255, (vy / 4 + 0.5) * 255));
+      wbuf[o + 2] = Math.min(255, g / 1.5 * 255); wbuf[o + 3] = 255;
+    }
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, windTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gw, gh, 0, gl.RGBA, gl.UNSIGNED_BYTE, wbuf);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(prog); gl.bindVertexArray(vao);
+    gl.uniform2f(U.uView, view[0], view[1]); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uQuality, quality);
+    gl.uniform1f(U.uCell, cell); gl.uniform2f(U.uGrid, gw, gh);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+  };
+  window.GrassGL = G;
+})();
+
+</script>
+<script>
+// Baked painterly fleece sprite. Technique adapted from the ChatGPT rewrite (flow-repaint):
+// irregular dry-brush "dabs" (tapered polygon + split bristle fibres) layered inside a lobed silhouette.
+(function () {
+  const TAU = Math.PI * 2, R = (a, b) => a + (b - a) * Math.random();
+  const choose = a => a[(Math.random() * a.length) | 0];
+  function dab(g, x, y, len, width, a, pigment, fibre, detail) {
+    const dx = Math.cos(a), dy = Math.sin(a), nx = -dy, ny = dx;
+    const w0 = width * R(0.62, 0.85), wm = width * R(0.77, 1.13), w1 = width * R(0.2, 0.47);
+    const ex = x + dx * len, ey = y + dy * len, bow = R(-0.02, 0.075) * len;
+    const mx = x + dx * len * 0.52 + nx * bow, my = y + dy * len * 0.52 + ny * bow;
+    g.fillStyle = pigment; g.beginPath();
+    g.moveTo(x + nx * w0 * 0.49, y + ny * w0 * 0.49);
+    g.lineTo(mx + nx * wm * 0.52, my + ny * wm * 0.52); g.lineTo(ex + nx * w1 * 0.39, ey + ny * w1 * 0.39);
+    g.lineTo(ex + dx * len * 0.055, ey + dy * len * 0.055); g.lineTo(ex - nx * w1 * 0.57, ey - ny * w1 * 0.57);
+    g.lineTo(mx - nx * wm * 0.5, my - ny * wm * 0.5); g.lineTo(x - nx * w0 * 0.53, y - ny * w0 * 0.53);
+    g.closePath(); g.fill();
+    if (!fibre || !detail) return;
+    g.strokeStyle = fibre; g.lineWidth = Math.max(0.45, width * 0.07); g.lineCap = 'round'; g.beginPath();
+    for (let i = 0; i < detail; i++) {
+      const off = ((i - (detail - 1) / 2) / Math.max(1, detail)) * width * 0.72, f = R(0.12, 0.34), t = R(0.62, 0.99);
+      g.moveTo(x + dx * len * f + nx * off, y + dy * len * f + ny * off);
+      g.quadraticCurveTo(x + dx * len * (f + t) * 0.5 + nx * (off + bow), y + dy * len * (f + t) * 0.5 + ny * (off + bow), x + dx * len * t + nx * off * 0.77, y + dy * len * t + ny * off * 0.77);
+    }
+    g.stroke();
+  }
+  function silhouette(g, rx, ry) {
+    const n = 38, p = [];
+    for (let i = 0; i < n; i++) { const a = i / n * TAU, s = 1 + Math.sin(a * 11 + 0.6) * 0.027 + Math.sin(a * 17 + 1.7) * 0.016 + Math.sin(a * 5) * 0.019; p.push([Math.cos(a) * rx * s, Math.sin(a) * ry * s]); }
+    g.beginPath(); g.moveTo((p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2);
+    for (let i = 1; i <= n; i++) { const a = p[i % n], b = p[(i + 1) % n]; g.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); }
+    g.closePath();
+  }
+  // Sprite space: body centred at (224,175), radius ~135 x 101 (maps to r*1.08 x r*0.8 when scaled by r/125).
+  function make() {
+    const c = document.createElement('canvas'); c.width = 460; c.height = 355;
+    const g = c.getContext('2d'); g.translate(224, 175);
+    g.save(); g.translate(5, 8); silhouette(g, 136, 102); g.fillStyle = '#bda98d'; g.fill(); g.restore();
+    silhouette(g, 135, 101); g.fillStyle = '#dfd0b5'; g.fill();
+    for (let i = 0; i < 132; i++) {
+      const a = i * TAU / 132 + R(-0.035, 0.035), c0 = Math.sin(a - 0.65) > 0.25 ? '#d8c8ab' : '#f6ead3';
+      dab(g, Math.cos(a) * R(121, 138), Math.sin(a) * R(88, 105), R(7, 20), R(5, 13), R(-0.62, 0.3), c0, c0 === '#d8c8ab' ? '#f2e4c9' : '#fff5e2', 2);
+    }
+    g.save(); silhouette(g, 132, 98); g.clip();
+    for (let i = 0; i < 540; i++) {
+      const a = R(0, TAU), q = Math.sqrt(Math.random()), x = Math.cos(a) * q * 132, y = Math.sin(a) * q * 99;
+      const shade = (-x * 0.24 + y * 0.52) / 125 + q * 0.13 + R(-0.29, 0.29);
+      const col = shade > 0.22 ? choose(['#c5b395', '#d2c2a7', '#dbccb2']) : shade > -0.1 ? choose(['#e6d8bf', '#eadfc9', '#f1e5d0']) : choose(['#f8efdf', '#fff4e4', '#fff9eb']);
+      dab(g, x, y, R(9, 30), R(5, 16), R(-0.68, 0.16), col, shade > 0.15 ? '#f3e8d4' : '#fff9ec', 2 + (Math.random() < 0.37 ? 1 : 0));
+    }
+    for (let i = 0; i < 190; i++) {
+      const a = R(0, TAU), q = Math.sqrt(Math.random()) * 0.92; g.globalAlpha = R(0.66, 0.95);
+      dab(g, Math.cos(a) * q * 126, Math.sin(a) * q * 95, R(6, 19), R(1.2, 4.1), R(-0.75, 0.25), choose(['#fffdf0', '#f7ead6', '#eadac0']), null, 0);
+    }
+    g.globalAlpha = 1; g.restore();
+    return c;
+  }
+  window.PaintWool = { make };
+})();
+
+</script>
+<script>
+// v2: painterly meadow with bristle-textured stroke sprites, brush-stroke lamb, blossom tree corner.
+(function () {
+  const W = window.Wind;
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const R = (a, b) => a + (b - a) * rnd();
+  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  const css = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+  // Palette after young lee "Flow": teal greens -> spring greens -> pale yellow-green highlights.
+  const GRASS = [
+    ['#1b4b38', '#235c47', '#2f7457'],
+    ['#2a6743', '#3a8150', '#529c5e'],
+    ['#3f884b', '#5ba35a', '#82c06c'],
+    ['#68ab5a', '#8fc76e', '#bde093'],
+    ['#9ccd78', '#c5e49c', '#eaf6c6'],
+  ];
+  const WIDTH = [14, 12, 10.5, 9, 8];
+  const FLOWER = ['#f4a3bd', '#f8c4d3', '#fff4ea', '#fff4ea', '#b49ae6', '#86aeea', '#f6d77a'];
+
+  const S = { w: 0, h: 0, dpr: 1, blades: [], flowers: [], landed: [], puffs: [], tufts: [], petals: [], curls: [], wisps: [], sprites: [], ground: null, tree: null, quality: 1,
+    lamb: { x: 0, y: 0, r: 40, r0: 40, face: -2.6, faceT: -2.6, hop: 0, look: 0, blink: 0, ear: 0, shake: 0,
+      vx: 0, vy: 0, mode: 'idle', tx: 0, ty: 0, gx: 0, gy: 0, walkPh: 0, gait: 0, mv: 0, trailAcc: 0 } };
+
+  // ---- bristle stroke sprite: tapered bundle of streaks with dry-brush ends ----
+  function strokeSprite(color, variant) {
+    const SW = 96, SH = 24, c = document.createElement('canvas'); c.width = SW; c.height = SH;
+    const g = c.getContext('2d'), base = hex(color), lo = mix(base, [10, 30, 20], 0.35), hi = mix(base, [255, 255, 225], 0.22);
+    g.lineCap = 'round';
+    const n = 16;
+    for (let k = 0; k < n; k++) {
+      const off = (k / (n - 1) - 0.5) * 2;           // -1..1 across bristles
+      const len = SW * (0.55 + 0.42 * Math.random()) * (1 - Math.abs(off) * 0.35);
+      const col = Math.random() < 0.15 ? hi : Math.random() < 0.3 ? lo : mix(base, Math.random() < 0.5 ? hi : lo, Math.random() * 0.3);
+      g.strokeStyle = css(col, 0.55 + Math.random() * 0.45);
+      g.lineWidth = 2.4 + Math.random() * 1.8;
+      g.beginPath();
+      const steps = 8; const bend = (variant - 1) * 3;
+      for (let s = 0; s <= steps; s++) {
+        const u = s / steps, x = 3 + u * len;
+        const taper = Math.pow(1 - u * 0.55, 0.6);   // narrows toward the tip
+        const y = SH / 2 + off * (SH / 2 - 3) * taper + Math.sin(u * 3.1) * bend;
+        s ? g.lineTo(x, y) : g.moveTo(x, y);
+      }
+      g.stroke();
+    }
+    return c;
+  }
+
+  // neutral-grey bristle sprites stacked into a 3-row atlas for the WebGL path (tinted in the shader)
+  function buildAtlas() {
+    const a = document.createElement('canvas'); a.width = 128; a.height = 96;
+    const g = a.getContext('2d');
+    for (let v = 0; v < 3; v++) g.drawImage(strokeSprite('#c8c8c8', v), 0, v * 32, 128, 32);
+    return a;
+  }
+  function buildSprites() {
+    S.sprites = GRASS.map(layer => layer.map(col => [0, 1, 2].map(v => strokeSprite(col, v))));
+  }
+
+  function paintGround() {
+    const c = document.getElementById('ground'); c.width = S.w * S.dpr; c.height = S.h * S.dpr;
+    const g = c.getContext('2d'); g.scale(S.dpr, S.dpr);
+    g.fillStyle = '#2a6446'; g.fillRect(0, 0, S.w, S.h);
+    const cols = ['#1b4a36', '#22573f', '#2a5f50', '#2d6a49', '#357a50', '#3f8a55', '#4f9a58', '#69ad62'];
+    const spr = cols.map(col => strokeSprite(col, 1));
+    const n = Math.min(9000, (S.w * S.h) / 60 | 0);
+    for (let i = 0; i < n; i++) {
+      const x = R(-30, S.w + 30), y = R(-30, S.h + 30);
+      const patch = W.noise2(x * 0.0035 + 9, y * 0.0035);
+      const ci = Math.max(0, Math.min(cols.length - 1, ((rnd() * 4 + (patch - 0.4) * 7) | 0)));
+      const a = 0.35 + (W.noise2(x * 0.004, y * 0.004) - 0.5) * 1.6 + R(-0.25, 0.25);
+      const l = R(26, 60), wd = R(8, 16);
+      g.save(); g.translate(x, y); g.rotate(a); g.globalAlpha = R(0.7, 1);
+      g.drawImage(spr[ci], 0, -wd / 2, l, wd); g.restore();
+    }
+    S.ground = c;
+  }
+
+  // ---- blossom tree corner (top-left), pre-rendered; sways as a whole ----
+  function paintTree() {
+    const TR = Math.max(170, Math.min(560, Math.max(S.w * 0.34, Math.min(S.w, S.h) * 0.5)));
+    const m = TR * 0.2, size = TR * 1.3 + m, c = document.createElement('canvas'); c.width = c.height = Math.ceil(size * S.dpr);
+    const g = c.getContext('2d'); g.scale(S.dpr, S.dpr); g.translate(m, m); g.lineCap = 'round';
+    // trunk seen from above: a dark rounded crown base with bark strokes
+    g.fillStyle = '#3a271f'; g.beginPath(); g.arc(0, 0, TR * 0.11, 0, 6.283); g.fill();
+    g.strokeStyle = '#5a3f2e'; g.lineWidth = TR * 0.02;
+    for (let i = 0; i < 7; i++) { const a = R(0, 6.28); g.beginPath(); g.arc(0, 0, TR * R(0.03, 0.09), a, a + R(0.6, 1.4)); g.stroke(); }
+    const clumps = [];
+    const bark = ['#3b2820', '#4d3528', '#6a4a36'];
+    function branch(x, y, a, len, wd, depth) {
+      const steps = 6; let px = x, py = y, aa = a;
+      for (let i = 1; i <= steps; i++) {
+        aa += R(-0.12, 0.12);
+        const nx = px + Math.cos(aa) * len / steps, ny = py + Math.sin(aa) * len / steps, w = wd * (1 - i / steps * 0.55);
+        for (let k = 0; k < 3; k++) {         // three bristly passes: dark, mid, sunlit edge
+          g.strokeStyle = bark[k]; g.lineWidth = w * [1, 0.7, 0.3][k];
+          const o = [0, -0.12, -0.3][k] * w;
+          g.beginPath(); g.moveTo(px - o * 0.7, py + o * 0.7); g.lineTo(nx - o * 0.7, ny + o * 0.7); g.stroke();
+        }
+        if (depth > 0 && i > 3 && rnd() < 0.25) clumps.push([nx, ny, TR * R(0.045, 0.065)]);
+        px = nx; py = ny;
+      }
+      if (depth > 0) clumps.push([px, py, TR * R(0.06, 0.085)]);
+      if (depth < 2) { const kids = depth === 0 ? 3 : 2; for (let k = 0; k < kids; k++) branch(px - Math.cos(aa) * len * R(0, 0.4), py - Math.sin(aa) * len * R(0, 0.4), aa + R(-0.75, 0.75), len * R(0.45, 0.6), wd * 0.55, depth + 1); }
+    }
+    for (let i = 0; i < 4; i++) branch(0, 0, 0.18 + i / 3 * 1.2 + R(-0.08, 0.08), TR * R(0.5, 0.6), TR * 0.075, 0);
+    // blossom clumps: dark rose underside first, then light dabs toward the sun (top-left)
+    const tones = ['#c96f92', '#e08aaa', '#f2a9c0', '#f7c3d2', '#fbdbe3', '#fff3f5'];
+    // clumps go on two separate layers so they can sway out of phase with the branches
+    const layers = [0, 1].map(() => { const lc = document.createElement('canvas'); lc.width = lc.height = c.width; const lg = lc.getContext('2d'); lg.scale(S.dpr, S.dpr); lg.translate(m, m); return [lc, lg]; });
+    const branchCtx = g;
+    for (const pass of [0, 1]) for (let ci = 0; ci < clumps.length; ci++) {
+      const [cx, cy, cr] = clumps[ci], g = layers[ci % 2][1];
+      const n = pass ? 20 : 9;
+      for (let i = 0; i < n; i++) {
+        const a = R(0, 6.28), rr = cr * Math.sqrt(rnd());
+        const x = cx + Math.cos(a) * rr + (pass ? -cr * 0.15 : cr * 0.15), y = cy + Math.sin(a) * rr + (pass ? -cr * 0.15 : cr * 0.2);
+        const lit = (-(x - cx) - (y - cy)) / cr;
+        const ti = pass ? Math.max(1, Math.min(5, Math.round(2.6 + lit * 1.6 + R(-0.8, 0.8)))) : (rnd() < 0.5 ? 0 : 1);
+        const l = cr * R(0.22, 0.38);
+        g.fillStyle = tones[ti]; g.globalAlpha = R(0.8, 1);
+        g.beginPath(); g.ellipse(x, y, l, l * R(0.55, 0.8), R(0, 6.28), 0, 6.283); g.fill();
+      }
+    }
+    const wide = S.w > S.h; S.tree = { c, ca: layers[0][0], cb: layers[1][0], TR, size, m, ox: wide ? TR * 0.16 : TR * 0.04, oy: wide ? TR * 0.12 : TR * 0.02 };
+  }
+
+  function makeGrain() {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const g = c.getContext('2d'), im = g.createImageData(256, 256);
+    for (let i = 0; i < im.data.length; i += 4) {
+      const v = 128 + (Math.random() - 0.5) * 70 + Math.sin(i * 0.37) * 6;
+      im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+    let o = document.getElementById('grain');
+    if (!o) { o = document.createElement('div'); o.id = 'grain'; document.body.insertBefore(o, document.getElementById('hint')); }
+    o.style.cssText = `position:fixed;inset:0;pointer-events:none;mix-blend-mode:overlay;opacity:.35;background:url(${c.toDataURL()}),radial-gradient(ellipse at 55% 55%,rgba(255,255,230,0) 40%,rgba(10,30,20,.5) 100%);`;
+  }
+
+  function build(w, h, dpr) {
+    seed = 12345; S.w = w; S.h = h; S.dpr = dpr;
+    if (!S.sprites.length) buildSprites();
+    if (!S.wool) S.wool = PaintWool.make();
+    paintGround(); paintTree();
+    const n = Math.min(3600, (w * h) / 240 | 0);
+    S.blades = [];
+    for (let i = 0; i < n; i++) {
+      const x = R(-40, w + 40), y = R(-40, h + 40);
+      const patch = W.noise2(x * 0.0035 + 9, y * 0.0035);
+      const layer = Math.max(0, Math.min(4, Math.floor(rnd() * 3.2 + (patch - 0.45) * 4)));
+      S.blades.push({ x, y, layer, len: R(28, 50) * (1.1 - layer * 0.06), ra: 0.35 + (W.noise2(x * 0.004, y * 0.004) - 0.5) * 1.6 + R(-0.35, 0.35), ph: R(0, 6.28), curl: R(-0.4, 0.4), v: (rnd() * 3) | 0 });
+    }
+    // Shuffle so any prefix is a uniform subset (for adaptive quality), then sort-free layering by bucket.
+    for (let i = n - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; [S.blades[i], S.blades[j]] = [S.blades[j], S.blades[i]]; }
+    if (window.GrassGL && GrassGL.ok) {
+      const ng = Math.min(16000, (w * h) / 75 | 0), gb = [];
+      for (let i = 0; i < ng; i++) {
+        const x = R(-40, w + 40), y = R(-40, h + 40);
+        const patch = W.noise2(x * 0.0035 + 9, y * 0.0035);
+        const layer = Math.max(0, Math.min(4, Math.floor(rnd() * 3.2 + (patch - 0.45) * 4)));
+        gb.push({ x, y, layer, len: R(26, 48) * (1.1 - layer * 0.06), width: WIDTH[layer] * 0.9,
+          ra: 0.35 + (W.noise2(x * 0.004, y * 0.004) - 0.5) * 1.6 + R(-0.35, 0.35), ph: R(0, 6.28), curl: R(-0.4, 0.4), v: (rnd() * 3) | 0 });
+      }
+      gb.sort((a, b) => a.layer - b.layer || a.y - b.y);
+      GrassGL.build(gb, w, h, dpr);
+    }
+    S.flowers = [];
+    const nf = Math.min(240, (w * h) / 2800 | 0);
+    for (let i = 0; i < nf; i++) {
+      const cx = W.noise2(i * 0.31, 1.7), cy = W.noise2(2.3, i * 0.29);
+      const x = (rnd() < 0.6 ? cx : rnd()) * (w + 40) - 20 + R(-40, 40), y = (rnd() < 0.6 ? cy : rnd()) * (h + 40) - 20 + R(-40, 40);
+      const big = rnd() < 0.45;
+      S.flowers.push({ x, y, s: big ? R(4, 6.5) : R(2, 3.4), c: FLOWER[(rnd() * FLOWER.length) | 0], ph: R(0, 6.28), petals: big ? 5 : 3 });
+    }
+    S.petals = []; S.landed = [];
+    const np = Math.min(140, (w * h) / 7500 | 0);
+    for (let i = 0; i < np; i++) S.petals.push(spawnPetal({}, true));
+    const L = S.lamb, ow = S.ow, oh = S.oh;
+    // keep the lamb where the user left it across resizes (phone toolbar show/hide)
+    if (ow) { L.x *= w / ow; L.y *= h / oh; } else { L.x = w * 0.58; L.y = h * 0.6; }
+    S.ow = w; S.oh = h;
+    L.r0 = Math.max(30, Math.min(66, Math.min(w, h) * 0.1)); L.mode = 'idle'; L.vx = L.vy = 0; W.trail.length = 0;
+    clampLamb(); L.r = L.r0 * depth(L.y);
+    // wool curls in body space (u along body, v across)
+    S.curls = [];
+    for (let i = 0; i < 300; i++) {
+      const rr = Math.sqrt(rnd()), th = R(0, 6.28), u = Math.cos(th) * rr, v = Math.sin(th) * rr * 0.8;
+      const light = (-u * 0.3 - v * 0.6 + (1 - rr) * 0.9 + R(-0.4, 0.4));
+      S.curls.push({ u, v, rr, cr: R(0.07, 0.13), a0: R(0, 6.28), sweep: R(2, 3.6), ph: R(0, 6.28), tone: light > 0.75 ? 3 : light > 0.3 ? 2 : light > -0.1 ? 1 : 0 });
+    }
+    S.tufts = [];
+    for (let i = 0; i < 30; i++) { const th = i / 30 * 6.283 + R(-0.08, 0.08); S.tufts.push({ th, u: Math.cos(th) * 1.0, v: Math.sin(th) * 0.8, ph: R(0, 6.28), s: R(0.11, 0.16) }); }
+    S.wisps = [];
+    for (let i = 0; i < 46; i++) { const th = R(0, 6.28); S.wisps.push({ u: Math.cos(th) * 0.95, v: Math.sin(th) * 0.76, ph: R(0, 6.28), l: R(0.25, 0.5) }); }
+    makeGrain();
+  }
+
+  function spawnPetal(p, anywhere) {
+    const T = S.tree;
+    if (anywhere || !T) { p.x = R(0, S.w); p.y = R(0, S.h); }
+    else { const a = R(0, 1.57), rr = T.TR * Math.sqrt(R(0.1, 1)); p.x = T.ox + Math.cos(a) * rr; p.y = T.oy + Math.sin(a) * rr; }
+    p.a = R(0, 6.28); p.s = R(2.5, 5); p.c = rnd() < 0.7 ? '#f8bdd0' : '#fff2f0'; p.ph = R(0, 6.28); p.life = R(4, 9);
+    return p;
+  }
+
+  // ---------- lamb movement: drag (spring follow + glide) and walk-to (arrive steering) ----------
+  const depth = y => 1 + (y / (S.h || 1) - 0.6) * 0.35;           // slight perspective: lower on screen = closer = bigger
+  function bounds() {
+    const r = S.lamb.r0;
+    return [r * 2.0, S.w - r * 2.0, r * 2.0, S.h - Math.max(112, r * 2.6)];   // head reaches ~1.6r from centre, +hop/depth growth
+  }
+  function clampLamb() {
+    const L = S.lamb, [x0, x1, y0, y1] = bounds();
+    if (L.x < x0) { L.x = x0; L.vx = Math.max(0, L.vx) * 0.3; } else if (L.x > x1) { L.x = x1; L.vx = Math.min(0, L.vx) * 0.3; }
+    if (L.y < y0) { L.y = y0; L.vy = Math.max(0, L.vy) * 0.3; } else if (L.y > y1) { L.y = y1; L.vy = Math.min(0, L.vy) * 0.3; }
+  }
+  function clampPt(x, y) { const [x0, x1, y0, y1] = bounds(); return [Math.max(x0, Math.min(x1, x)), Math.max(y0, Math.min(y1, y))]; }
+  function moveLamb(dt, t) {
+    const L = S.lamb, r0 = L.r0;
+    const steps = dt > 0.02 ? 3 : 2, h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      if (L.mode === 'drag') {
+        // critically-ish damped spring toward the finger: follows closely with a little lag
+        const [tx, ty] = clampPt(L.tx + L.gx, L.ty + L.gy), K = 110, C = 2 * Math.sqrt(K) * 0.92;
+        L.vx += ((tx - L.x) * K - L.vx * C) * h; L.vy += ((ty - L.y) * K - L.vy * C) * h;
+      } else if (L.mode === 'glide') {
+        const f = Math.exp(-h * 3.2); L.vx *= f; L.vy *= f;
+        if (Math.hypot(L.vx, L.vy) < 6) { L.mode = 'idle'; }
+      } else if (L.mode === 'walk') {
+        const dx = L.tx - L.x, dy = L.ty - L.y, d = Math.hypot(dx, dy), vmax = r0 * 4.2;
+        const want = Math.min(vmax, d * 1.6), wx = d > 0.5 ? dx / d * want : 0, wy = d > 0.5 ? dy / d * want : 0;
+        // velocity eases toward the arrive speed (critically damped: no overshoot), with capped acceleration = gentle start
+        const e = 1 - Math.exp(-h * 6.5), cap = r0 * 10 * h;
+        let ax = (wx - L.vx) * e, ay = (wy - L.vy) * e; const al = Math.hypot(ax, ay); if (al > cap) { ax *= cap / al; ay *= cap / al; }
+        L.vx += ax; L.vy += ay;
+        if (d < 1.5 && Math.hypot(L.vx, L.vy) < 10) { L.mode = 'idle'; }
+      } else { const f = Math.exp(-h * 10); L.vx *= f; L.vy *= f; }
+      L.x += L.vx * h; L.y += L.vy * h;
+      clampLamb();
+    }
+    const sp = Math.hypot(L.vx, L.vy);
+    L.r = r0 * depth(L.y);
+    // gait strength + stride phase advance with distance travelled (feet don't skate)
+    const gT = Math.min(1, sp / (r0 * 1.4));
+    L.gait += (gT - L.gait) * Math.min(1, dt * 7);
+    const prevPh = L.walkPh; L.walkPh += sp * dt / (r0 * 0.4);
+    if (L.gait > 0.25 && Math.floor(L.walkPh / Math.PI) !== Math.floor(prevPh / Math.PI) && window.WindAudio) WindAudio.step(t, L.gait);
+    L.mv += (Math.min(1, sp / (r0 * 2.2)) - L.mv) * Math.min(1, dt * 5);
+    if (sp > r0 * 0.7) { L.faceT = Math.atan2(L.vy, L.vx); L.look = Math.max(L.look, 1.4); L.moving = true; } else L.moving = false;
+    // grass parting: lamb + wake of points that bend back with a small springy overshoot
+    W.lambPart = { x: L.x, y: L.y, R: L.r * 1.15, k: 0.15 + 0.95 * L.mv };
+    L.trailAcc += sp * dt;
+    if (L.trailAcc > L.r * 0.35 && L.mv > 0.08) { L.trailAcc = 0; W.trail.push({ x: L.x, y: L.y, R: L.r * 1.1, k: 0, k0: 0.15 + 0.95 * L.mv, age: 0 }); if (W.trail.length > 40) W.trail.shift(); }
+    for (const p of W.trail) { p.age += dt; p.k = p.k0 * Math.exp(-p.age * 2.2) * Math.cos(p.age * 3.2); }
+    while (W.trail.length && W.trail[0].age > 2.2) W.trail.shift();
+  }
+
+  // ---------- drawing ----------
+  const buckets = [];
+  function drawGrass(g, t, layerFrom, layerTo, ring) {
+    for (let i = 0; i < 15; i++) buckets[i] = [];
+    const lim = ring ? S.blades.length : Math.floor(S.blades.length * S.quality), L = S.lamb;
+    const fx = L.x + Math.cos(L.face) * L.r * 1.25, fy = L.y + Math.sin(L.face) * L.r * 1.25;
+    const hx = L.x + Math.cos(L.face) * L.r * 0.45, hy = L.y + Math.sin(L.face) * L.r * 0.45, rr2 = L.r * L.r * 1.25;
+    for (let i = 0; i < lim; i++) {
+      const b = S.blades[i];
+      if (b.layer < layerFrom || b.layer > layerTo) continue;
+      if (layerFrom >= 3) { const dx = b.x - hx, dy = b.y - hy, d2 = dx * dx + dy * dy; if (d2 < rr2 || (ring && (d2 > rr2 * 4 || b.y < L.y + L.r * 0.55 || (b.x - fx) ** 2 + (b.y - fy) ** 2 < L.r * L.r * 3.2))) continue; }
+      let [vx, vy, gu] = W.at(b.x, b.y);
+      { const pp = W.part(b.x, b.y), pk = ring ? 0.35 : 1; vx += pp[0] * pk; vy += pp[1] * pk; gu += Math.min(0.6, pp[2] * 0.45) * pk; }
+      const m = Math.hypot(vx, vy), k = Math.min(1, m * 1.4);
+      const mc = Math.min(1.3, m), flutter = Math.sin(t * 4 + b.ph) * (0.06 + mc * 0.08);
+      const wa = Math.atan2(vy, vx) + flutter + b.curl * 0.3;
+      const dx = Math.cos(b.ra) * (1 - k) * 0.8 + Math.cos(wa) * k, dy = Math.sin(b.ra) * (1 - k) * 0.8 + Math.sin(wa) * k;
+      const sheen = gu > 0.5 ? 2 : gu > 0.18 ? 1 : 0;
+      buckets[b.layer * 3 + sheen].push(b, Math.atan2(dy, dx), b.len * Math.min(1.25, 0.6 + Math.hypot(dx, dy) * 0.5));
+    }
+    const d = S.dpr;
+    for (let Ly = layerFrom; Ly <= layerTo; Ly++) for (let sh = 0; sh < 3; sh++) {
+      const a = buckets[Ly * 3 + sh], wd = WIDTH[Ly];
+      for (let i = 0; i < a.length; i += 3) {
+        const b = a[i], c = Math.cos(a[i + 1]), s = Math.sin(a[i + 1]);
+        g.setTransform(d * c, d * s, -d * s, d * c, d * b.x, d * b.y);
+        g.drawImage(S.sprites[Ly][sh][b.v], 0, -wd / 2, a[i + 2], wd);
+      }
+    }
+    g.setTransform(d, 0, 0, d, 0, 0);
+  }
+
+  function drawFlowers(g, t) {
+    for (const f of S.flowers) {
+      let [vx, vy, gu] = W.at(f.x, f.y);
+      { const pp = W.part(f.x, f.y); vx += pp[0]; vy += pp[1]; }
+      const sw = Math.sin(t * 3 + f.ph) * (1.5 + Math.min(1, gu) * 3);
+      const x = f.x + vx * 9 + sw * 0.6, y = f.y + vy * 9 + sw * 0.3;
+      g.fillStyle = f.c;
+      for (let p = 0; p < f.petals; p++) {
+        const a = p / f.petals * 6.283 + f.ph;
+        g.beginPath(); g.ellipse(x + Math.cos(a) * f.s * 0.7, y + Math.sin(a) * f.s * 0.7, f.s * 0.75, f.s * 0.48, a, 0, 6.283); g.fill();
+      }
+      if (f.petals === 5) { g.fillStyle = '#f2c35a'; g.beginPath(); g.arc(x, y, f.s * 0.32, 0, 6.283); g.fill(); }
+      // tuck: 1-2 blades from just upwind lean over the flower's edge
+      const wa = Math.atan2(vy, vx) + Math.sin(t * 3 + f.ph) * 0.15, c = Math.cos(wa), sn = Math.sin(wa), d = S.dpr;
+      for (let k = 0; k < (f.petals === 5 ? 2 : 1); k++) {
+        const off = (k ? 0.9 : -0.6) * f.s, bx = f.x - c * f.s * 2.2 - sn * off, by = f.y - sn * f.s * 2.2 + c * off, L = f.s * 3.2;
+        g.setTransform(d * c, d * sn, -d * sn, d * c, d * bx, d * by);
+        g.drawImage(S.sprites[2 + k][gu > 0.3 ? 1 : 0][k], 0, -2.6, L, 5.2);
+      }
+      g.setTransform(d, 0, 0, d, 0, 0);
+    }
+  }
+
+  function drawLanded(g, dt) {
+    for (const p of S.landed) {
+      p.age += dt; const al = Math.max(0, 0.85 - p.age / 30); if (!al) continue;
+      g.globalAlpha = al; g.fillStyle = p.c;
+      g.beginPath(); g.ellipse(p.x, p.y, p.s, p.s * 0.55, p.a, 0, 6.283); g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+
+  function drawTree(g, t, dt) {
+    const T = S.tree; if (!T) return;
+    const [wx, wy] = W.at(T.ox + T.TR * 0.4, T.oy + T.TR * 0.4);
+    const e = 1 - Math.exp(-dt * 1.2); T.vx = (T.vx || 0) + (wx - (T.vx || 0)) * e; T.vy = (T.vy || 0) + (wy - (T.vy || 0)) * e;
+    const vx = T.vx, vy = T.vy, m = Math.min(1.4, Math.hypot(vx, vy)); S.treeM = m;
+    T.ph = (T.ph || 0) + dt * 6.283 / 2.6;
+    // canopy-tip displacement in px: ~4px calm .. ~18px at max wind, then converted to a bend angle
+    const amp = (4 + 14 * Math.min(1, m / 1.2)) / (T.TR * 0.8), lean = m * 6 / (T.TR * 0.8);
+    const sway = Math.sin(T.ph) * amp + lean;                        // branches
+    const swayA = Math.sin(T.ph - 0.35) * amp * 1.15 + lean * 1.1, swayB = Math.sin(T.ph - 0.55) * amp * 1.2 + lean * 1.15;   // clumps lag slightly, same direction
+    const dx = vx * 4, dy = vy * 4;
+    // soft canopy shadow on the grass
+    g.save(); g.translate(T.ox + T.TR * 0.14, T.oy + T.TR * 0.18); g.rotate(sway * 0.6);
+    const gr = g.createRadialGradient(0, 0, T.TR * 0.3, 0, 0, T.TR * 1.08);
+    gr.addColorStop(0, 'rgba(8,30,25,.42)'); gr.addColorStop(1, 'rgba(8,30,25,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(0, 0, T.TR * 1.08, 0, 6.283); g.fill(); g.restore();
+    g.save(); g.translate(T.ox, T.oy); g.rotate(sway); g.drawImage(T.c, -T.m, -T.m, T.size, T.size); g.restore();
+    g.save(); g.translate(T.ox + dx, T.oy + dy); g.rotate(swayA); g.drawImage(T.ca, -T.m, -T.m, T.size, T.size); g.restore();
+    g.save(); g.translate(T.ox + dx * 1.3, T.oy + dy * 1.3); g.rotate(swayB); g.drawImage(T.cb, -T.m, -T.m, T.size, T.size); g.restore();
+  }
+
+  function drawPetals(g, dt, t) {
+    // gusts shake extra petals loose from the canopy
+    const shed = (S.treeM || 0) > 0.45 ? dt * (S.treeM - 0.45) * 26 : 0;
+    for (let k = shed + Math.random(); k >= 1; k--) spawnPetal(S.petals[(Math.random() * S.petals.length) | 0], false);
+    for (const p of S.puffs) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 1 - dt * 4; p.vy *= 1 - dt * 4; p.life -= dt;
+      if (p.life <= 0) continue;
+      g.globalAlpha = Math.min(1, p.life * 2.2); g.fillStyle = p.c;
+      g.beginPath(); g.ellipse(p.x, p.y, p.s, p.s * 0.55, p.a, 0, 6.283); g.fill();
+    }
+    S.puffs = S.puffs.filter(p => p.life > 0); g.globalAlpha = 1;
+    for (const p of S.petals) {
+      const [vx, vy] = W.at(p.x, p.y);
+      p.x += (vx * 230 + Math.sin(t * 2 + p.ph) * 14) * dt; p.y += (vy * 230 + Math.cos(t * 1.7 + p.ph) * 14 + 6) * dt;
+      p.a += dt * (1 + Math.hypot(vx, vy) * 6); p.life -= dt;
+      if (p.life < 0 && p.x > 0 && p.y > 0 && p.x < S.w && p.y < S.h) { S.landed.push({ x: p.x, y: p.y, a: p.a, s: p.s, c: p.c, age: 0 }); if (S.landed.length > 160) S.landed.shift(); }
+      if (p.life < 0 || p.x > S.w + 20 || p.y > S.h + 20 || p.x < -40 || p.y < -40) spawnPetal(p, false);
+      g.fillStyle = p.c; g.globalAlpha = Math.min(0.9, p.life);
+      g.beginPath(); g.ellipse(p.x, p.y, p.s, p.s * Math.abs(Math.sin(p.a)) * 0.6 + 0.6, p.a * 0.5, 0, 6.283); g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+
+  const WOOL = ['#c9bba1', '#e2d6bf', '#f2e9d8', '#fffaf1'];
+  const wb = [[], [], [], []];
+  function drawLamb(g, dt, t) {
+    const L = S.lamb, r = L.r;
+    const [wvx, wvy, gu] = W.at(L.x, L.y);
+    // ease the local wind so wool never pops between frames
+    const ease = 1 - Math.exp(-dt * 5);
+    L.svx = (L.svx || 0) + (wvx - (L.svx || 0)) * ease; L.svy = (L.svy || 0) + (wvy - (L.svy || 0)) * ease;
+    const vx = L.svx, vy = L.svy, mRaw = Math.hypot(vx, vy), m = Math.min(1.3, mRaw), nx = vx / (mRaw || 1), ny = vy / (mRaw || 1);
+    // body pose uses a much slower low-pass of the wind (no per-frame jitter); phases are accumulated, never t*(f(m))
+    const eb = 1 - Math.exp(-dt * 0.9);
+    L.pvx = (L.pvx || 0) + (wvx - (L.pvx || 0)) * eb; L.pvy = (L.pvy || 0) + (wvy - (L.pvy || 0)) * eb;
+    const pm = Math.min(1.3, Math.hypot(L.pvx, L.pvy)), pnx = L.pvx / (Math.hypot(L.pvx, L.pvy) || 1), pny = L.pvy / (Math.hypot(L.pvx, L.pvy) || 1);
+    if (L.look <= 0) L.faceT = Math.atan2(L.pvy, L.pvx) + (pm > 0.5 ? 0 : Math.sin(t * 0.3) * 0.6) + 0.9;
+    L.rockPh = (L.rockPh || 0) + dt * 6.283 / 2.4;          // 2.4s body rock
+    L.fl = (L.fl || 0) + dt * 6.283 * (1.1 + 0.6 * Math.min(1, m));   // soft tuft flutter ~1.1-1.7 Hz
+    L.look = Math.max(0, L.look - dt);
+    
+    let d = L.faceT - L.face; d = Math.atan2(Math.sin(d), Math.cos(d)); L.face += d * Math.min(1, dt * (L.moving ? 7 : 1.6));
+    const prevP = 1 - L.hop; L.hop = Math.max(0, L.hop - dt * 1.3); const hp = L.hop > 0 ? 1 - L.hop : 0;
+    L.shake = Math.max(0, L.shake - dt);
+    L.blink -= dt; if (L.blink < -3.2 - Math.random() * 2) L.blink = 0.12;
+    // hop: anticipation squash -> airborne (bigger, stretched, legs show) -> landing squash + puff
+    let air = 0, su = 1, sv = 1, s = 1 + Math.sin(t * 2.2) * 0.012 + Math.abs(Math.sin(L.walkPh)) * 0.055 * L.gait;
+    if (hp > 0 && hp < 0.18) { const q = hp / 0.18; s *= 1 - 0.07 * q; sv = 1 + 0.16 * q; su = 1 - 0.08 * q; }
+    else if (hp >= 0.18 && hp < 0.78) { air = Math.sin((hp - 0.18) / 0.6 * Math.PI); s *= 1 + 0.28 * air; su = 1 + 0.15 * air; sv = 1 - 0.08 * air; }
+    else if (hp >= 0.78) { const q = (hp - 0.78) / 0.22, b = Math.sin(q * Math.PI) * (1 - q * 0.3); sv = 1 + 0.17 * b; su = 1 - 0.1 * b; s *= 1 - 0.06 * b; }
+    if (L.hop > 0 && prevP < 0.78 && hp >= 0.78) for (let i = 0; i < 16; i++) {
+      const a = i / 16 * 6.283 + Math.random() * 0.3, sp = r * (1.6 + Math.random() * 1.6);
+      S.puffs.push({ x: L.x + Math.cos(a) * r * 0.9, y: L.y + Math.sin(a) * r * 0.75, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, a, s: r * (0.06 + Math.random() * 0.05), life: 0.55, c: ['#8cc66e', '#5aa45a', '#f8bdd0', '#c2e39a'][i % 4] });
+    }
+    const hb = (hp > 0 ? -Math.sin(hp * 6.283) * 0.07 : 0) + Math.sin(L.walkPh * 2) * 0.07 * L.gait;      // head bob (hop + trot nod)
+    // body sway in wind: clear downwind offset + rocking of several degrees
+    const rock = Math.sin(L.rockPh) * 0.5 + 0.5;
+    const wsw = Math.sin(L.walkPh) * 0.06 * r * L.gait, fcx = Math.cos(L.face), fcy = Math.sin(L.face);   // side-to-side trot sway
+    const bx = L.x + pnx * pm * r * (0.14 + 0.2 * rock) - fcy * wsw, by = L.y + pny * pm * r * (0.14 + 0.2 * rock) + fcx * wsw;
+    const face = L.face + Math.sin(L.shake * 30) * L.shake * 0.25 + Math.sin(L.rockPh) * pm * 0.15 + Math.sin(L.walkPh) * 0.06 * L.gait;
+    const ca = Math.cos(face), sa = Math.sin(face);
+    const P = (u, v, k = 1) => [bx + (u * ca - v * sa) * r * k, by + (u * sa + v * ca) * r * k];
+    L.bx = bx; L.by = by; L.drawFace = face; L.drawS = s * Math.max(su, sv);
+
+    // soft shadow (offset grows + shrinks while airborne)
+    const so = r * (0.2 + air * 0.6), sr = r * 1.4 * (1 - air * 0.22);
+    const sg = g.createRadialGradient(L.x + so, L.y + so, sr * 0.2, L.x + so, L.y + so, sr);
+    sg.addColorStop(0, `rgba(10,35,25,${0.4 - air * 0.12})`); sg.addColorStop(1, 'rgba(10,35,25,0)');
+    g.fillStyle = sg; g.beginPath(); g.arc(L.x + so, L.y + so, sr, 0, 6.283); g.fill();
+
+    // whole-body deform: stretch downwind (fleece billows) + hop squash/stretch, around the body centre
+    const wa = Math.atan2(pny, pnx), dA = pm * 0.11 * (0.8 + 0.2 * Math.sin(L.rockPh * 1.3)), dP = pm * 0.05;
+    g.save(); g.translate(bx, by);
+    g.rotate(wa); g.scale(1 + dA, 1 - dP); g.rotate(-wa);
+    g.rotate(face); g.scale(su, sv); g.rotate(-face);
+    { const sp = Math.hypot(L.vx, L.vy), st = Math.min(1, sp / (L.r0 * 9)); if (st > 0.01) { const va = Math.atan2(L.vy, L.vx); g.rotate(va); g.scale(1 + 0.09 * st, 1 - 0.05 * st); g.rotate(-va); } }
+    g.translate(-bx, -by);
+    // no legs/hooves: the walk reads through body bob, side sway, head nod, tuft wobble and grass parting
+    // rim tufts behind the coat: downwind ones billow out and flap, with a warm-grey rim for contrast
+    for (const tf of S.tufts) {
+      const ox = Math.cos(tf.th + face), oy = Math.sin(tf.th + face), wgt = Math.max(0, ox * nx + oy * ny) + 0.2;
+      const flap = Math.sin(L.fl + tf.ph);
+      const out = r * m * wgt * (0.17 + 0.07 * flap) + r * 0.035 * L.gait * Math.sin(L.walkPh * 2 + tf.th * 2), side = r * m * 0.03 * Math.cos(L.fl * 0.8 + tf.ph);
+      const [x0, y0] = P(tf.u, tf.v, s), x = x0 + nx * out - ny * side, y = y0 + ny * out + nx * side, rr = r * tf.s * (1 + wgt * m * 0.25);
+      g.fillStyle = '#efe4cf'; g.strokeStyle = '#a8957a'; g.lineWidth = Math.max(1, r * 0.035);
+      g.beginPath(); g.arc(x, y, rr, 0, 6.283); g.fill(); g.stroke();
+      g.strokeStyle = '#fffaf0'; g.lineWidth = Math.max(1, r * 0.03);
+      g.beginPath(); g.arc(x - rr * 0.15, y - rr * 0.15, rr * 0.55, tf.ph, tf.ph + 2.6); g.stroke();
+    }
+
+    // baked dry-brush fleece (see wool.js); slightly squashed downwind so the whole coat leans
+    g.save(); g.translate(bx + nx * m * r * 0.05, by + ny * m * r * 0.05); g.rotate(face);
+    const k = r / 125 * s * 0.95; g.scale(k, k); g.drawImage(S.wool, -224, -175); g.restore();
+
+    // curls: short curved brush strokes, batched per tone, streaming downwind
+    for (const a of wb) a.length = 0;
+    for (const c of S.curls) {
+      if (c.tone < 2 && c.rr < 0.8) continue;      // fewer, brighter locks over the baked fleece
+      const wob = Math.sin(L.fl * 0.7 + c.ph + c.u * 2);   // ruffle travels across the coat
+      const push = r * (0.03 + m * 0.16) * (0.25 + c.rr) * (0.6 + 0.4 * wob);
+      const [x0, y0] = P(c.u, c.v, s);
+      wb[c.tone].push(x0 + nx * push, y0 + ny * push, c.cr * r, c.a0 + face + wob * 0.2, c.sweep);
+    }
+    g.lineCap = 'round'; g.globalAlpha = 0.85;
+    for (let k = 0; k < 4; k++) {
+      const a = wb[k]; g.strokeStyle = WOOL[k]; g.lineWidth = Math.max(1.2, r * (0.075 - k * 0.008));
+      g.beginPath();
+      for (let i = 0; i < a.length; i += 5) {
+        g.moveTo(a[i] + Math.cos(a[i + 3]) * a[i + 2], a[i + 1] + Math.sin(a[i + 3]) * a[i + 2]);
+        g.arc(a[i], a[i + 1], a[i + 2], a[i + 3], a[i + 3] + a[i + 4]);
+      }
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    // wisps on the outline, blown downwind
+    g.strokeStyle = 'rgba(255,250,240,.8)'; g.lineWidth = Math.max(1.2, r * 0.035);
+    g.beginPath();
+    for (const w of S.wisps) {
+      const [x, y] = P(w.u, w.v, s); const wob = Math.sin(L.fl + w.ph);
+      const l = r * w.l * (0.25 + m * 0.55) * (0.6 + 0.4 * wob);
+      g.moveTo(x, y); g.quadraticCurveTo(x + nx * l * 0.5 - ny * wob * 3, y + ny * l * 0.5 + nx * wob * 3, x + nx * l, y + ny * l);
+    }
+    g.stroke();
+
+    // head
+    const PH = (u, v, k) => P(u + hb, v, k);
+    const [hx, hy] = PH(1.02, 0, s); const hr = r * 0.44 * s;
+    L.hx = hx; L.hy = hy; L.hr = hr;
+    L.ear += dt * (4 + m * 4);
+    g.lineCap = 'round';
+    for (const side of [-1, 1]) {
+      let ea = face + side * (1.75 + Math.sin(L.ear + side * 1.3) * (0.15 + m * 0.6) + air * 0.5 - (hp >= 0.78 ? 0.25 : 0));
+      { const dd = Math.atan2(Math.sin(wa - ea), Math.cos(wa - ea)); ea += dd * Math.min(0.55, m * 0.45); }   // ears stream downwind
+      const ex = hx + Math.cos(ea) * hr * 0.55, ey = hy + Math.sin(ea) * hr * 0.55, ux = Math.cos(ea), uy = Math.sin(ea);
+      // ear: a few parallel brush strokes, tan outside, pink inner stroke
+      for (let k = 0; k < 4; k++) {
+        const o = (k - 1.5) * hr * 0.09;
+        g.strokeStyle = ['#b89a78', '#d5bb9b', '#e8d5ba', '#c9ad8c'][k]; g.lineWidth = hr * 0.17;
+        g.beginPath(); g.moveTo(ex - uy * o, ey + ux * o); g.lineTo(ex + ux * hr * (0.95 - Math.abs(o) / hr) - uy * o, ey + uy * hr * (0.95 - Math.abs(o) / hr) + ux * o); g.stroke();
+      }
+      g.strokeStyle = '#eeb0b2'; g.lineWidth = hr * 0.11;
+      g.beginPath(); g.moveTo(ex + ux * hr * 0.2, ey + uy * hr * 0.2); g.lineTo(ex + ux * hr * 0.75, ey + uy * hr * 0.75); g.stroke();
+    }
+    const hg = g.createRadialGradient(hx - hr * 0.3, hy - hr * 0.3, hr * 0.1, hx, hy, hr * 1.05);
+    hg.addColorStop(0, '#f8eddc'); hg.addColorStop(0.8, '#e6d4b9'); hg.addColorStop(1, 'rgba(226,207,179,0)');
+    g.fillStyle = hg; g.beginPath(); g.ellipse(hx, hy, hr * 1.08, hr * 0.94, face, 0, 6.283); g.fill();
+    // head fur: short strokes combed from the crown toward the snout
+    for (let i = 0; i < 26; i++) {
+      const a = i * 2.39996, rr = Math.sqrt((i + 0.5) / 26) * 0.75;
+      const [fx, fy] = PH(1.02 + Math.cos(a) * rr * 0.42, Math.sin(a) * rr * 0.36, s);
+      const len = hr * 0.28, dir = face + Math.sin(a) * 0.5;
+      g.strokeStyle = ['#e9dac3', '#f5ecdd', '#fffaf1', '#dccaae'][i % 4]; g.lineWidth = hr * 0.12;
+      g.beginPath(); g.moveTo(fx, fy); g.quadraticCurveTo(fx + Math.cos(dir + 0.4) * len * 0.5, fy + Math.sin(dir + 0.4) * len * 0.5, fx + Math.cos(dir) * len, fy + Math.sin(dir) * len); g.stroke();
+    }
+    const [sx, sy] = PH(1.38, 0, s);
+    g.fillStyle = '#f4e6d4'; g.beginPath(); g.ellipse(sx, sy, hr * 0.5, hr * 0.55, face, 0, 6.283); g.fill();
+    g.strokeStyle = '#fbf3e8'; g.lineWidth = hr * 0.09;
+    for (let i = 0; i < 5; i++) { const [ax, ay] = PH(1.3, (i - 2) * 0.07, s); g.beginPath(); g.moveTo(ax, ay); g.lineTo(ax + ca * hr * 0.35, ay + sa * hr * 0.35); g.stroke(); }
+    const [qx, qy] = PH(1.56, 0, s);
+    g.fillStyle = '#e39aa2'; g.beginPath(); g.ellipse(qx, qy, hr * 0.12, hr * 0.19, face, 0, 6.283); g.fill();
+    for (const side of [-1, 1]) {
+      const [bx, by] = PH(1.25, side * 0.35, s); g.fillStyle = 'rgba(244,160,170,.4)'; g.beginPath(); g.arc(bx, by, hr * 0.16, 0, 6.283); g.fill();
+      const [ex, ey] = PH(1.17, side * 0.21, s);
+      g.fillStyle = '#3a2a22'; g.beginPath(); g.ellipse(ex, ey, hr * 0.085, L.blink > 0 ? hr * 0.02 : hr * 0.11, face, 0, 6.283); g.fill();
+    }
+    // curly fringe on the crown
+    g.strokeStyle = WOOL[3]; g.lineWidth = Math.max(1.2, r * 0.06); g.beginPath();
+    for (let i = 0; i < 12; i++) {
+      const a = i * 2.4, rr = 0.1 + (i % 4) * 0.07, wob = Math.sin(L.fl + i);
+      const [fx, fy] = PH(0.9 + Math.cos(a) * rr, Math.sin(a) * rr * 1.3, s);
+      const cx = fx + nx * r * 0.05 * (1 + wob * 0.5), cy = fy + ny * r * 0.05 * (1 + wob * 0.5), cr = hr * 0.18, a0 = a + face;
+      g.moveTo(cx + Math.cos(a0) * cr, cy + Math.sin(a0) * cr); g.arc(cx, cy, cr, a0, a0 + 3);
+    }
+    g.stroke();
+    g.restore();
+    return gu + m * 0.4;
+  }
+
+  function draw(g, dt, t) {
+    g.clearRect(0, 0, S.w, S.h);
+    const useGL = window.GrassGL && GrassGL.ok;
+    if (useGL) GrassGL.draw(t, S.quality, dt);
+    else drawGrass(g, t, 0, 2);
+    drawFlowers(g, t);
+    drawLanded(g, dt);
+    moveLamb(dt, t);
+    const lvl = drawLamb(g, dt, t);
+    // Mask: front blades may only overlap a thin crescent at the lamb's lower edge, never its back/head.
+    const Lm = S.lamb; g.save();
+    for (const [cx, cy, rx, ry] of [[Lm.bx, Lm.by - Lm.r * 0.18, Lm.r * 1.2 * (Lm.drawS || 1), Lm.r * 0.95 * (Lm.drawS || 1)], [Lm.hx, Lm.hy - Lm.r * 0.1, Lm.hr * 1.9, Lm.hr * 1.9]]) {
+      g.beginPath(); g.rect(-50, -50, S.w + 100, S.h + 100); g.ellipse(cx, cy, rx, ry, Lm.drawFace, 0, 6.283); g.clip('evenodd');
+    }
+    drawGrass(g, t, 3, 4, useGL); g.restore(); // GL path: only re-draw front blades around the lamb so it sits in the grass
+    drawTree(g, t, dt);
+    drawPetals(g, dt, t);
+    return lvl;
+  }
+
+  const hitLamb = (x, y) => Math.hypot(x - S.lamb.x, y - S.lamb.y) < S.lamb.r * 1.5;
+  function hop() { const L = S.lamb; L.hop = 1; L.shake = 0.6; }
+  function grab(x, y) { const L = S.lamb; L.mode = 'drag'; L.gx = L.x - x; L.gy = L.y - y; L.tx = x; L.ty = y; }
+  function dragTo(x, y) { const L = S.lamb; if (L.mode === 'drag') { L.tx = x; L.ty = y; } }
+  function release() {
+    const L = S.lamb; if (L.mode !== 'drag') return;
+    const sp = Math.hypot(L.vx, L.vy), cap = L.r0 * 14;               // small glide on release
+    if (sp > cap) { L.vx *= cap / sp; L.vy *= cap / sp; }
+    L.mode = 'glide';
+  }
+  function walkTo(x, y) {
+    const L = S.lamb; if (L.mode === 'drag') return;
+    [L.tx, L.ty] = clampPt(x, y); L.mode = 'walk';
+  }
+  function tapLamb(x, y) {
+    const L = S.lamb;
+    if (Math.hypot(x - L.x, y - L.y) < L.r * 1.5) { L.hop = 1; L.shake = 0.6; return true; }
+    L.faceT = Math.atan2(y - L.y, x - L.x); L.look = 2.5;
+    return false;
+  }
+
+  window.Scene = { buildAtlas, GRASS, build, draw, tapLamb, hitLamb, hop, grab, dragTo, release, walkTo, state: S };
+})();
+
+</script>
+<script>
+// Boot, resize, loop, UI and pointer wiring.
+(function () {
+  const cv = document.getElementById('c'), g = cv.getContext('2d');
+  const slider = document.getElementById('wind'), gustBtn = document.getElementById('gust'), sndBtn = document.getElementById('sound'), hint = document.getElementById('hint');
+  let dpr = 1;
+  const glOk = GrassGL.init(document.getElementById('gl'), Scene.buildAtlas(), Scene.GRASS);
+  window.__grassMode = glOk ? 'webgl2' : 'canvas2d';
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, glOk ? 2 : 1.5);
+    const w = innerWidth, h = innerHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    Scene.build(w, h, dpr);
+  }
+  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 150); });
+  resize();
+
+  const setP = () => slider.style.setProperty('--p', slider.value * 100 + '%');
+  slider.addEventListener('input', () => { Wind.strength = +slider.value; setP(); }); setP();
+  Wind.strength = +slider.value;
+
+  function unlock() { WindAudio.start(); hint.classList.add('off'); }
+  gustBtn.addEventListener('click', () => { unlock(); Wind.gustHold = 0.9; gustBtn.classList.add('on'); setTimeout(() => gustBtn.classList.remove('on'), 900); });
+  sndBtn.addEventListener('click', () => { unlock(); WindAudio.setOn(!WindAudio.on); sndBtn.classList.toggle('muted', !WindAudio.on); });
+
+  // pointer:
+  //  - on the lamb: quick tap = hop + baa; press and move (>8px) = drag it across the grass (glides a little on release)
+  //  - on the grass: tap = ring gust + the lamb trots over there; swipe = gust along the stroke + the lamb trots to where you let go
+  let ptr = null;
+  const pt = e => [e.clientX, e.clientY];
+  cv.addEventListener('pointerdown', e => {
+    if (ptr) return;                                   // ignore extra fingers
+    unlock(); e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    const [x, y] = pt(e), onLamb = Scene.hitLamb(x, y);
+    ptr = { id: e.pointerId, x0: x, y0: y, lx: x, ly: y, t0: performance.now(), onLamb, drag: false, moved: false };
+    if (!onLamb) {
+      Scene.tapLamb(x, y);                              // lamb glances toward the touch
+      for (let i = 0; i < 6; i++) { const a = i / 6 * 6.283; Wind.poke(x, y, Math.cos(a), Math.sin(a), 0.5); }
+    }
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!ptr || e.pointerId !== ptr.id) return;
+    const [x, y] = pt(e);
+    if (!ptr.moved && Math.hypot(x - ptr.x0, y - ptr.y0) > 8) {
+      ptr.moved = true;
+      if (ptr.onLamb) { ptr.drag = true; Scene.grab(ptr.x0, ptr.y0); }
+    }
+    if (ptr.drag) { Scene.dragTo(x, y); return; }
+    const dx = x - ptr.lx, dy = y - ptr.ly;
+    if (dx * dx + dy * dy > 400) { Wind.poke(x, y, dx, dy, 0.9); ptr.lx = x; ptr.ly = y; }
+  });
+  function end(e, cancel) {
+    if (!ptr || e.pointerId !== ptr.id) return;
+    const [x, y] = pt(e);
+    if (ptr.drag) Scene.release();
+    else if (!cancel) {
+      if (ptr.onLamb) { if (performance.now() - ptr.t0 < 600) { Scene.hop(); WindAudio.baa(t); } }
+      else Scene.walkTo(x, y);
+    }
+    ptr = null;
+  }
+  cv.addEventListener('pointerup', e => end(e, false));
+  cv.addEventListener('pointercancel', e => end(e, true));
+  cv.addEventListener('lostpointercapture', e => { if (ptr && e.pointerId === ptr.id) { if (ptr.drag) Scene.release(); ptr = null; } });
+
+  // adaptive quality: every ~1.5s, nudge the drawn blade fraction toward ~55fps
+  let acc = 0, frames = 0;
+  function adapt(dt) {
+    acc += dt; frames++;
+    if (acc < 1.5) return;
+    const fps = frames / acc, S = Scene.state; acc = 0; frames = 0;
+    if (fps < 50) S.quality = Math.max(window.__grassMode === 'webgl2' ? 0.4 : 0.6, S.quality * 0.9);
+    else if (fps > 58) S.quality = Math.min(1, S.quality + 0.05);
+    window.__fps = fps;
+  }
+  let prev = performance.now(), t = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - prev) / 1000); prev = now; t += dt;
+    Wind.update(dt);
+    const lvl = Scene.draw(g, dt, t);
+    WindAudio.update(Wind.strength * 0.6 + lvl * 0.5 + Wind.gustBoost * 0.5, lvl, t);
+    adapt(dt);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+</script>
+</body>
+</html>
+
