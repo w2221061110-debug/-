@@ -302,12 +302,15 @@ function renderBook() {
 }
 
 // ---------- 复习 ----------
+/** 今日已学：今天（凌晨 4 点起）评过分的不同卡片数，直接从每张卡的 srs.last / srs.firstAt 推算，无需额外日志 */
+function studiedToday(list, now = Date.now()) { const t = dayStart(now); const done = list.filter(i => i.srs && (i.srs.last || 0) >= t); const nw = done.filter(i => (i.srs.firstAt || 0) >= t).length; return { n: done.length, nw, rv: done.length - nw }; }
+function todayLine(list, unit) { const s = studiedToday(list); return `<div class="todayline"><span>今日已学</span><b>${s.n}</b><span>${unit}</span><small>${s.n ? `新学 ${s.nw} · 复习 ${s.rv}` : '还没开始，加油'}</small></div>`; }
 const MODES = { en: ['英 → 中', '看英文，想中文'], cn: ['中 → 英', '看中文，想英文'], listen: ['听音选义', '听发音，四选一'], spell: ['听写', '听发音，拼出来'] };
 VIEWS.review = () => {
   setTitle('复习');
   const { due, nw } = reviewCounts();
   const mode = getKV('mode', 'en');
-  view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新词</small></div><div><b>${items().filter(i => level(i) === 3).length}</b><small>已掌握</small></div></div>
+  view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新词</small></div><div><b>${items().filter(i => level(i) === 3).length}</b><small>已掌握</small></div>${todayLine(items(), '个')}</div>
   <div class="sec">练习方式</div><div class="modes">${Object.entries(MODES).map(([k, [a, b]]) => `<button class="mode ${k === mode ? 'on' : ''}" data-m="${k}"><b>${a}</b><small>${b}</small></button>`).join('')}</div>
   <div style="display:grid;gap:10px;margin-top:20px"><button class="btn pri" id="start" style="min-height:58px;font-size:18px" ${due + nw ? '' : 'disabled'}>${due + nw ? `开始复习 ${due + nw} 个（到期 ${due} · 新词 ${nw}）` : '今天没有要复习的 🎉'}</button>
   ${mem.items.size >= 1 ? `<button class="btn" id="extra">自由练习（随机 20 个）</button>` : ''}</div>
@@ -470,7 +473,7 @@ VIEWS.law = () => {
   const ls = laws(); const { due, nw } = lawCounts(); const mode = getKV('lawMode', 'sec');
   if (!ls.length) { view.innerHTML = `<div class="empty"><div class="e">⚖️</div>还没有法条<br><small>打开老师/同学发的法条链接（…?pack=law-unit8）就会自动导入</small><br><button class="btn pri" id="lwImp" style="margin-top:16px">导入 Unit 8 必备法条（5 条）</button></div>`; $('#lwImp').onclick = () => openPack('law-unit8'); return; }
   const decks = new Map(); for (const l of ls) { const k = l.deckName || l.deck || '法条'; if (!decks.has(k)) decks.set(k, []); decks.get(k).push(l); }
-  view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新学</small></div><div><b>${ls.filter(l => lawLevel(l) === 3).length}/${ls.length}</b><small>已掌握</small></div></div>
+  view.innerHTML = `<div class="card stats"><div><b>${due}</b><small>到期复习</small></div><div><b>${nw}</b><small>今日新学</small></div><div><b>${ls.filter(l => lawLevel(l) === 3).length}/${ls.length}</b><small>已掌握</small></div>${todayLine(ls, '条')}</div>
   <div class="sec">背诵方式</div><div class="modes law3">${Object.entries(LAWMODES).map(([k, [a, b]]) => `<button class="mode ${k === mode ? 'on' : ''}" data-m="${k}"><b>${a}</b><small>${b}</small></button>`).join('')}</div>
   <div style="display:grid;gap:10px;margin-top:16px"><button class="btn pri" id="lwStart" style="min-height:58px;font-size:18px" ${due + nw ? '' : 'disabled'}>${due + nw ? `开始背诵 ${due + nw} 条（到期 ${due} · 新学 ${nw}）` : '今天的法条背完啦 🎉'}</button>
   <button class="btn" id="lwFree">自由练习（全部 ${ls.length} 条，打乱顺序）</button></div>
@@ -575,5 +578,5 @@ window.addEventListener('vocab-storage-error', () => toast(store.storageWarning)
   if (packName != null) openPack(packName);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   autoGist(); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { updateBadge(); autoGist(); } });
-  window.__app = { laws, importLaws, store, mem, parseText, translate, speak, review, sync, go, importText };
+  window.__app = { studiedToday, laws, importLaws, store, mem, parseText, translate, speak, review, sync, go, importText };
 })();

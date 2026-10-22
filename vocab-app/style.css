@@ -170,3 +170,6 @@ body.sheet-open .toast{bottom:auto;top:calc(64px + env(safe-area-inset-top))}
 .tabs button span{white-space:nowrap}
 @media (min-width:760px){.modes.law3{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:759px){.modes.law3>:last-child:nth-child(odd){grid-column:1/-1}}
+.stats .todayline{grid-column:1/-1;display:flex;align-items:baseline;justify-content:center;flex-wrap:wrap;gap:4px 6px;padding:10px 6px 2px;border-top:1px dashed var(--line);font-size:14px;color:var(--sub)}
+.stats .todayline b{display:inline;font:700 22px/1 var(--en);color:var(--acc2)}
+.stats .todayline small{flex-basis:auto;margin-left:6px;padding:2px 9px;border-radius:999px;background:var(--accs);color:var(--acc);font-size:12px}
