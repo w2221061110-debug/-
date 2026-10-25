@@ -1420,7 +1420,8 @@ void main(){
     function sub(t) { if (self.ok && ws.readyState === 1) { mid = mid % 65535 + 1; ws.send(pkt(0x82, [mid >> 8, mid & 255, ...str(t), 0])); } }
     self.subscribe = t => { if (subs.includes(t)) return; subs.push(t); sub(t); };
     self.publish = (t, obj) => {
-      if (!self.ok || ws.readyState !== 1 || ws.bufferedAmount > 64000) return false;
+      if (!self.ok || ws.readyState !== 1 || ws.bufferedAmount > 64000) { self.drop = (self.drop || 0) + 1; if (DBG && self.drop % 50 === 1) console.log('NET drop ' + url + ' ' + ws.bufferedAmount + ' ' + self.drop); return false; }
+      self.sent = (self.sent || 0) + 1;
       const pl = enc.encode(JSON.stringify(obj)); if (pl.length > MAXP) return false;
       const ts = str(t), body = new Uint8Array(ts.length + pl.length); body.set(ts); body.set(pl, ts.length);
       ws.send(pkt(0x30, body)); return true;
@@ -1432,6 +1433,7 @@ void main(){
 
   // ---------- Nostr relay as a pub/sub fallback on port 443 (ephemeral kind, signed with a throwaway session key) ----------
   // Used because many networks only allow 443, and the public MQTT brokers only offer WSS on 8084.
+  const DBG = qs.get('netdbg') === '1';
   const NS = window.NostrSig, NK = 25050;
   const nsk = NS ? NS.schnorr.utils.randomPrivateKey() : null, npk = NS ? NS.hex(NS.schnorr.getPublicKey(nsk)) : '';
   function Nostr(url, onMsg0, onState0) {
@@ -1447,12 +1449,13 @@ void main(){
       ws.onmessage = e => {
         if (typeof e.data !== 'string' || e.data.length > MAXP * 2) return;
         let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+        if (m[0] !== 'EVENT' && !(m[0] === 'OK' && m[2])) { DBG && console.log('NET ' + url + ' ' + e.data.slice(0, 160)); }
         if (m[0] !== 'EVENT' || !m[2] || m[2].kind !== NK) return; const ev = m[2];
-        if (seen.has(ev.id)) return; seen.add(ev.id); if (seen.size > 3000) seen = new Set();
+        self.rx = (self.rx || 0) + 1; if (seen.has(ev.id)) return; seen.add(ev.id); if (seen.size > 3000) seen = new Set();
         const tg = (ev.tags || []).find(x => x[0] === 't'); if (!tg || !subs.includes(tg[1])) return;
         try { onMsg(tg[1], JSON.parse(ev.content), self); } catch (_) {}
       };
-      ws.onclose = ws.onerror = () => { clearTimeout(to); const was = self.ok; self.ok = false; if (!self.closed) onState(self, was ? 'down' : 'fail'); };
+      ws.onclose = ws.onerror = (e) => { DBG && console.log('NET close ' + url + ' ' + (e && e.code)); clearTimeout(to); const was = self.ok; self.ok = false; if (!self.closed) onState(self, was ? 'down' : 'fail'); };
     }
     self.subscribe = t => { if (subs.includes(t)) return; subs.push(t); sub(t); };
     self.publish = (t, obj) => {
@@ -1469,7 +1472,7 @@ void main(){
   const Relay = (url, a, b) => /^wss:\/\/[^/:]+\/?$/.test(url) ? Nostr(url, a, b) : Mqtt(url, a, b);
 
   const Net = { BROKERS, log: [] };
-  const L = (...a) => { Net.log.push(a.join(' ')); if (Net.log.length > 60) Net.log.shift(); };
+  const L = (...a) => { DBG && console.log('NET ' + a.join(' ')); Net.log.push(a.join(' ')); if (Net.log.length > 60) Net.log.shift(); };
 
   // ---------- host ----------
   // handlers: onMsg(msg, clientId), onStatus(text)
@@ -1520,23 +1523,41 @@ void main(){
     const hi = setInterval(() => { if (!C.chosen) { for (const r of C.relays) r.ok && r.publish(up, hello()); if (C.conn && C.conn.open) C.conn.send(hello()); } }, 1200);
     function choose(v, kind) {
       if (C.chosen) return C.chosen === v;
-      C.chosen = v; C.kind = kind; clearInterval(hi); clearTimeout(ft); L('client chose', kind);
-      for (const r of C.relays) if (r !== v) r.close();
+      C.chosen = v; C.kind = kind; v.lastRx = Date.now(); clearInterval(hi); clearTimeout(ft); L('client chose', kind);
+      // relay mode keeps the other relays subscribed as warm backups (public relays can stall silently)
+      if (!v.publish) { for (const r of C.relays) r.close(); C.relays = []; }
       if (v !== C.conn && C.peer) { C.peer.destroy(); C.peer = null; }
       return true;
     }
+    const swap = (old, nr) => { const i = C.relays.indexOf(old); if (i >= 0) C.relays[i] = nr; else C.relays.push(nr); if (C.chosen === old) { C.chosen = nr; nr.lastRx = Date.now(); } };
     if (USE_MQTT) for (const url of BROKERS) {
-      const onM = (t, m, rel) => { if (!m || (m.to && m.to !== myId)) return; if (!C.chosen && m.to !== myId) return; if (choose(rel, 'relay ' + url.split('/')[2])) onMsg(m); };
+      const onM = (t, m, rel) => {
+        if (!m || (m.to && m.to !== myId)) return; if (!C.chosen && m.to !== myId) return;
+        rel.lastRx = Date.now();
+        const v = C.chosen;
+        if (v && v.publish && rel !== v && C.relays.includes(rel)) {      // failover: chosen relay went quiet, this one delivers
+          if (Date.now() - (v.lastRx || 0) > 2500) { C.chosen = rel; C.kind = 'relay ' + url.split('/')[2]; L('client failover', C.kind); }
+          else return;
+        }
+        if (choose(rel, 'relay ' + url.split('/')[2])) onMsg(m);
+      };
       const onS = (rel, s) => {
         L('client mqtt', url, s);
         if (s === 'up') { rel.subscribe(dn); rel.publish(up, hello()); }
-        if ((s === 'down' || s === 'fail') && C.chosen === rel && C.alive) setTimeout(() => {   // reconnect the chosen relay (once per drop)
-          if (!C.alive || C.chosen !== rel) return; const nr = Relay(url, onM, onS); C.chosen = nr; C.relays = [nr];
-        }, s === 'down' ? 800 : 3000);
+        if ((s === 'down' || s === 'fail') && C.alive && C.chosen && C.chosen.publish && C.relays.includes(rel)) setTimeout(() => {   // keep every relay alive once in a game
+          if (!C.alive || !C.relays.includes(rel)) return; { const nr = Relay(url, onM, onS); nr.url0 = url; nr.onM = onM; nr.onS = onS; swap(rel, nr); }
+        }, rel === C.chosen ? (s === 'down' ? 800 : 3000) : 5000);
       };
-      const r = Relay(url, onM, onS);
+      const r = Relay(url, onM, onS); r.url0 = url; r.onM = onM; r.onS = onS;
       C.relays.push(r);
     }
+    // watchdog: a silent chosen relay -> say hello on the backups so the host routes to us there; long silence -> rebuild sockets
+    const wd = setInterval(() => {
+      const v = C.chosen; if (!C.alive || !v || !v.publish) return; const now = Date.now(), q = now - (v.lastRx || 0);
+      if (q > 2500) for (const r of C.relays) if (r !== v && r.ok) r.publish(up, hello());
+      if (q > 8000 && now - (C.rb || 0) > 8000) { C.rb = now; L('client rebuild');
+        for (const r of C.relays.slice()) if (now - (r.lastRx || 0) > 8000 && r.url0) { const nr = Relay(r.url0, r.onM, r.onS); nr.url0 = r.url0; nr.onM = r.onM; nr.onS = r.onS; r.close(); swap(r, nr); } }
+    }, 1000);
     if (USE_PEER) {
       const p = new Peer({ config: { iceServers: ICE }, debug: 0 }); C.peer = p;
       p.on('open', () => {
@@ -1549,7 +1570,7 @@ void main(){
     }
     const ft = setTimeout(() => { if (!C.chosen) onFail('timeout'); }, 40000);
     C.send = m => { const v = C.chosen; if (!v) return; if (LOSS && Math.random() < LOSS) return; if (v.publish) v.publish(up, m); else if (v.open) v.send(m); };
-    C.close = () => { C.alive = false; clearInterval(hi); clearTimeout(ft); C.relays.forEach(r => r.close()); if (C.peer) C.peer.destroy(); };
+    C.close = () => { C.alive = false; clearInterval(hi); clearInterval(wd); clearTimeout(ft); C.relays.forEach(r => r.close()); if (C.peer) C.peer.destroy(); };
     return C;
   };
   window.Net = Net;
