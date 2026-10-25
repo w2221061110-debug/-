@@ -6,8 +6,18 @@
 <title>花瓣收集赛 · 风里的小羊</title>
 <meta name="description" content="和好友一起，在风里的草地上抢花瓣。点开链接就能加入。">
 <meta name="theme-color" content="#2f5a3a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Ccircle cx=%2732%27 cy=%2734%27 r=%2724%27 fill=%27%23fffdf4%27/%3E%3Cellipse cx=%2744%27 cy=%2734%27 rx=%2710%27 ry=%279%27 fill=%27%233b3230%27/%3E%3Cpath d=%27M14 12c6 2 9 7 8 12-6-1-10-6-8-12z%27 fill=%27%23f6a9c1%27/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="share.jpg">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="format-detection" content="telephone=no">
+<meta property="og:type" content="website">
+<meta property="og:title" content="花瓣收集赛 · 风里的小羊">
+<meta property="og:description" content="和好友一起，在风里的草地上抢花瓣。点开链接就能加入。">
+<meta property="og:image" content="https://w2221061110-debug.github.io/-/petal-race/share.jpg">
+<meta property="og:image:width" content="500">
+<meta property="og:image:height" content="400">
+<meta property="og:url" content="https://w2221061110-debug.github.io/-/petal-race/">
+<meta itemprop="image" content="https://w2221061110-debug.github.io/-/petal-race/share.jpg">
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#2f5a3a;touch-action:none;-webkit-user-select:none;user-select:none;font-family:-apple-system,"PingFang SC",sans-serif}
 canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;-webkit-touch-callout:none}
@@ -92,7 +102,15 @@ h1{font-size:34px}h2{font-size:26px}
 #plist li button{border:0;background:none;color:var(--cream);opacity:.6;font-size:15px;padding:0 2px;cursor:pointer}
 #plist li.empty{opacity:.45;justify-content:center}
 @keyframes rise2{from{transform:scale(.8);opacity:0}}
-.net{font-size:11px;opacity:.5;margin:8px 0 0}
+.net{font-size:12px;margin:10px 0 0;display:flex;align-items:center;justify-content:center;gap:6px;opacity:.85}
+.net i{width:8px;height:8px;border-radius:50%;background:#f2c35a;box-shadow:0 0 0 3px rgba(242,195,90,.22)}
+.net.ok i{background:#7fd88a;box-shadow:0 0 0 3px rgba(127,216,138,.25)}.net.bad i{background:#ef8a7a;box-shadow:0 0 0 3px rgba(239,138,122,.25)}
+.net.wait i{animation:netp 1s ease-in-out infinite}@keyframes netp{50%{opacity:.35}}.net small{opacity:.6;font-size:10px}
+.tip{margin:12px 0 2px;padding:10px 12px;border-radius:14px;background:rgba(255,236,170,.18);border:1px solid rgba(255,226,140,.45);line-height:1.5}
+.tip b{display:block;font-size:15px;color:#ffe9a8;letter-spacing:.04em}.tip span{display:block;font-size:12.5px;opacity:.85;margin-top:2px}
+.tip.done{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.15)}.tip.done b{font-size:13px;color:inherit}
+#rSub{margin:4px 0 10px;letter-spacing:.04em;font-size:14px}#rlist li.gone{opacity:.5}
+.how.err{color:#ffd2c8;opacity:1;font-size:13px}
 #podium{display:flex;justify-content:center;align-items:flex-end;gap:10px;height:190px;margin:10px 0 6px}
 .pod{display:flex;flex-direction:column;align-items:center;width:31%;max-width:118px}
 .pod canvas{width:66px;height:66px;margin-bottom:-6px;position:relative;z-index:1}
@@ -132,6 +150,12 @@ body.kb .card{top:calc(var(--st) + 12px + (var(--vvh) - var(--st) - 24px) / 2)}
 </style>
 </head>
 <body>
+<div id="boot" style="position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,#5f9a5c,#2f5a3a 70%);color:#fffbea;font-family:-apple-system,'PingFang SC',sans-serif;transition:opacity .5s">
+<style>#boot .s{position:relative;width:86px;height:62px;animation:bh 1s ease-in-out infinite}#boot .w{position:absolute;left:8px;top:8px;width:70px;height:46px;border-radius:50%;background:#fffdf4;box-shadow:-14px -6px 0 -4px #fffdf4,14px -8px 0 -4px #fffdf4,0 -12px 0 -6px #fffdf4}#boot .h{position:absolute;right:-6px;top:16px;width:26px;height:22px;border-radius:45%;background:#3b3230}#boot .h:after{content:'';position:absolute;left:15px;top:7px;width:4px;height:4px;border-radius:50%;background:#fff}#boot .l{position:absolute;bottom:-8px;width:6px;height:12px;border-radius:3px;background:#3b3230}#boot .p{position:absolute;width:12px;height:12px;border-radius:12px 0;background:#ffb3c7;animation:bp 2.4s linear infinite;opacity:0}#boot .t{margin-top:30px;font-size:15px;letter-spacing:.15em}#boot .d{margin-top:8px;font-size:12px;opacity:.75}#boot .r{margin-top:14px;width:140px;height:4px;border-radius:4px;background:rgba(255,255,255,.2);overflow:hidden}#boot .r i{display:block;height:100%;width:30%;border-radius:4px;background:#ffd5e0;animation:br 1.4s ease-in-out infinite}@keyframes bh{50%{transform:translateY(-6px)}}@keyframes bp{0%{transform:translate(-70px,-30px) rotate(0);opacity:0}20%{opacity:1}100%{transform:translate(90px,40px) rotate(540deg);opacity:0}}@keyframes br{0%{margin-left:-30%}100%{margin-left:100%}}</style>
+<div class="s"><i class="p" style="top:0"></i><i class="p" style="top:30px;animation-delay:.8s;background:#ffe08a"></i><i class="p" style="top:50px;animation-delay:1.6s"></i><div class="w"></div><div class="h"></div><i class="l" style="left:20px"></i><i class="l" style="left:56px"></i></div>
+<div class="t">花瓣收集赛</div><div class="r"><i></i></div><div class="d">小羊正在赶来草地…第一次打开要几秒</div>
+</div>
+<script>window.addEventListener('load',function(){requestAnimationFrame(function(){requestAnimationFrame(function(){var b=document.getElementById('boot');if(!b)return;b.style.opacity='0';b.style.pointerEvents='none';setTimeout(function(){b.remove()},550)})})});</script>
 <canvas id="ground"></canvas>
 <canvas id="gl"></canvas>
 <canvas id="c"></canvas>
@@ -174,7 +198,7 @@ body.kb .card{top:calc(var(--st) + 12px + (var(--vvh) - var(--st) - 24px) / 2)}
     <p class="sub">房间码</p>
     <div class="codebig" id="roomCode">····</div>
     <div class="row"><button id="bCopy" class="btn pri sm">复制邀请链接</button><button id="bShare" class="btn sm hide">分享</button></div>
-    <p class="how" id="shareTip">把链接发到微信，好友点开就进来了。发完记得回到这个页面。</p>
+    <p class="tip" id="shareTip"><b>发完链接，记得回到这个页面</b><span>好友点开链接就能进来，你得留在这里等他们</span></p>
     <ul id="plist"></ul>
     <div class="row"><button id="bBot" class="btn sm">加一只机器人</button><button id="bStart" class="btn pri sm">开始</button></div>
     <p class="how" id="roomMsg"></p>
@@ -183,6 +207,7 @@ body.kb .card{top:calc(var(--st) + 12px + (var(--vvh) - var(--st) - 24px) / 2)}
 
   <section id="results" class="card wide hide">
     <h2 id="rTitle">本局结束</h2>
+    <p class="sub hide" id="rSub"></p>
     <div id="podium"></div>
     <ol id="rlist"></ol>
     <div class="row"><button id="bAgain" class="btn pri">再来一局</button><button id="bLobby" class="btn">回到房间</button></div>
@@ -1497,7 +1522,8 @@ void main(){
         c.on('data', impair(m => { if (m && typeof m.from === 'string') { H.conns[m.from] = c; H.via[m.from] = c; onMsg(m, m.from); } }));
         c.on('close', () => { for (const k in H.conns) if (H.conns[k] === c) delete H.conns[k]; });
       });
-      p.on('error', e => { L('host peer err', e.type); if (e.type === 'unavailable-id') { H.peerOk = false; status(); } });
+      // after a host refresh the broker may still hold our old id for a few seconds: retry
+      p.on('error', e => { L('host peer err', e.type); if (e.type === 'unavailable-id') { H.peerOk = false; status(); try { p.destroy(); } catch (_) {} if (tries < 40 && H.alive) setTimeout(() => startPeer(tries + 1), 2500); } });
       p.on('disconnected', () => { H.peerOk = false; status(); if (H.alive) setTimeout(() => { try { p.reconnect(); } catch (_) {} }, 1500); });
     }
     startPeer(0);
@@ -1517,13 +1543,14 @@ void main(){
 
   // ---------- client ----------
   // Sends hello on every relay; locks onto whichever relay delivers the first message from the host.
-  Net.join = function (code, myId, hello, onMsg, onFail) {
+  Net.join = function (code, myId, hello, onMsg, onFail, opt) {
+    opt = opt || {}; const t0 = Date.now(); let upAt = 0, peerNo = 0, peerOpen = 0;
     const C = { code, chosen: null, relays: [], peer: null, conn: null, alive: true, kind: '' };
     const up = `${PFX}/${code}/up`, dn = `${PFX}/${code}/dn`;
     const hi = setInterval(() => { if (!C.chosen) { for (const r of C.relays) r.ok && r.publish(up, hello()); if (C.conn && C.conn.open) C.conn.send(hello()); } }, 1200);
     function choose(v, kind) {
       if (C.chosen) return C.chosen === v;
-      C.chosen = v; C.kind = kind; v.lastRx = Date.now(); clearInterval(hi); clearTimeout(ft); L('client chose', kind);
+      C.chosen = v; C.kind = kind; v.lastRx = Date.now(); clearInterval(hi); clearInterval(ft); L('client chose', kind);
       // relay mode keeps the other relays subscribed as warm backups (public relays can stall silently)
       if (!v.publish) { for (const r of C.relays) r.close(); C.relays = []; }
       if (v !== C.conn && C.peer) { C.peer.destroy(); C.peer = null; }
@@ -1543,7 +1570,7 @@ void main(){
       };
       const onS = (rel, s) => {
         L('client mqtt', url, s);
-        if (s === 'up') { rel.subscribe(dn); rel.publish(up, hello()); }
+        if (s === 'up') { upAt = upAt || Date.now(); rel.subscribe(dn); rel.publish(up, hello()); }
         if ((s === 'down' || s === 'fail') && C.alive && C.chosen && C.chosen.publish && C.relays.includes(rel)) setTimeout(() => {   // keep every relay alive once in a game
           if (!C.alive || !C.relays.includes(rel)) return; { const nr = Relay(url, onM, onS); nr.url0 = url; nr.onM = onM; nr.onS = onS; swap(rel, nr); }
         }, rel === C.chosen ? (s === 'down' ? 800 : 3000) : 5000);
@@ -1560,17 +1587,29 @@ void main(){
     }, 1000);
     if (USE_PEER) {
       const p = new Peer({ config: { iceServers: ICE }, debug: 0 }); C.peer = p;
-      p.on('open', () => {
+      let tries = 0;
+      const dial = () => {
         const c = p.connect(`${PFX}-${code}`, { serialization: 'json' }); C.conn = c;
         c.on('open', () => c.send(hello()));
         c.on('data', impair(m => { if (!m || (m.to && m.to !== myId)) return; if (choose(c, 'webrtc')) onMsg(m); }));
         c.on('close', () => { if (C.chosen === c && C.alive) onFail('lost'); });
-      });
-      p.on('error', e => L('client peer err', e.type));
+      };
+      p.on('open', () => { peerOpen = peerOpen || Date.now(); dial(); });
+      // the host may still be registering: dial again a couple of times before believing "no such room"
+      p.on('error', e => { L('client peer err', e.type); if (e.type === 'peer-unavailable') { if (++tries < 2 && C.alive && !C.chosen) setTimeout(() => C.alive && !C.chosen && dial(), 1000); else peerNo = peerNo || Date.now(); } });
     }
-    const ft = setTimeout(() => { if (!C.chosen) onFail('timeout'); }, 40000);
+    // fail fast: once a relay has been up (or the peer broker said "no such room") for a few seconds with no answer
+    // from the host, the room is not there. A rejoin after a refresh waits longer (the host may be reloading too).
+    const MIN = opt.slow ? 15000 : 7000, QUIET = opt.slow ? 12000 : 5000, CAP = opt.slow ? 30000 : 25000;
+    const ft = setInterval(() => {
+      if (C.chosen || !C.alive) { clearInterval(ft); return; }
+      const n = Date.now(), el = n - t0;
+      const relaySaysNo = upAt && n - upAt > QUIET, peerSaysNo = peerNo && n - peerNo > 800;   // only the broker's "no such peer" is definitive; slow ICE is not
+      const decided = USE_MQTT && upAt ? relaySaysNo : peerSaysNo;
+      if ((el > MIN && decided) || el > CAP) { clearInterval(ft); onFail(upAt || peerOpen || peerNo ? 'timeout' : 'nonet'); }
+    }, 400);
     C.send = m => { const v = C.chosen; if (!v) return; if (LOSS && Math.random() < LOSS) return; if (v.publish) v.publish(up, m); else if (v.open) v.send(m); };
-    C.close = () => { C.alive = false; clearInterval(hi); clearInterval(wd); clearTimeout(ft); C.relays.forEach(r => r.close()); if (C.peer) C.peer.destroy(); };
+    C.close = () => { C.alive = false; clearInterval(hi); clearInterval(wd); clearInterval(ft); C.relays.forEach(r => r.close()); if (C.peer) C.peer.destroy(); };
     return C;
   };
   window.Net = Net;
@@ -1625,14 +1664,19 @@ void main(){
   const $ = id => document.getElementById(id);
   const S = Scene.state, qs = new URLSearchParams(location.search);
   const COLORS = ['#e2574c', '#f2a541', '#4c8bd6', '#9b6fd0', '#2fa99d', '#ef7fb0'];
-  const NAMES = ['棉花糖', '小云朵', '奶盖', '团子', '毛毛', '咩咩', '豆包', '布丁', '蒲公英', '栗子', '年糕', '雪球', '汤圆', '麻薯', '小卷', '芝麻'];
+  const NAMES = ['棉花糖', '小云朵', '奶盖', '团子', '毛毛', '咩咩', '奶糖', '布丁', '蒲公英', '栗子', '年糕', '雪球', '汤圆', '麻薯', '小卷', '芝麻', '可颂', '泡芙', '糖霜', '桃桃', '米团', '花生', '柚子', '蜜豆'];
   const BOTN = ['豆豆', '花卷', '糯米', '球球', '云云'];
   const ROUND = +(qs.get('round') || 60), COUNT = 3, VMAX = 0.42, LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ';
   const KIND = [{ pts: 1 }, { pts: 2 }, { pts: 5 }];
   const store = { get(k, d) { try { const v = localStorage.getItem('pr_' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem('pr_' + k, JSON.stringify(v)); } catch (_) {} } };
   const rid = () => Math.random().toString(36).slice(2, 10);
   const pickName = () => NAMES[(Math.random() * NAMES.length) | 0];
-  const me = { id: qs.get('id') || rid(), name: qs.get('name') || store.get('name', pickName()), color: store.get('color', COLORS[(Math.random() * 6) | 0]) };
+  // per-tab session (survives a refresh, not a new tab): stable player id + the room we were in
+  const ss = { get(k) { try { return JSON.parse(sessionStorage.getItem('pr_' + k)); } catch (_) { return null; } }, set(k, v) { try { sessionStorage.setItem('pr_' + k, JSON.stringify(v)); } catch (_) {} }, del(k) { try { sessionStorage.removeItem('pr_' + k); } catch (_) {} } };
+  const sess0 = ss.get('sess');
+  const sid = qs.get('id') || ss.get('id') || rid(); ss.set('id', sid);
+  // the name is only remembered once the player chose it themselves; otherwise every visit gets a fresh cute one
+  const me = { id: sid, name: qs.get('name') || (sess0 && sess0.name) || (n => n && !NAMES.includes(n) && n !== '豆包' ? n : null)(store.get('name', null)) || pickName(), color: (sess0 && COLORS.includes(sess0.color) && sess0.color) || store.get('color', COLORS[(Math.random() * 6) | 0]) };
   const isWx = /MicroMessenger/i.test(navigator.userAgent);
   S.vmax = VMAX; S.topPad = 46; S.botPad = 34;
 
@@ -1653,7 +1697,9 @@ void main(){
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const clampName = s => (s || '').trim().slice(0, 8) || pickName();
   const now = () => performance.now();
-  function setUrl(code) { try { history.replaceState(null, '', code ? '?room=' + code : location.pathname); } catch (_) {} }
+  // keeps debug/test switches (relay overrides, round length…) so a refresh behaves the same
+  const KEEP = ['mqtt', 'peer', 'mq', 'round', 'netdbg', 'loss', 'lag', 'jit'];
+  function setUrl(code) { try { const u = new URLSearchParams(); if (code) u.set('room', code); for (const k of KEEP) if (qs.has(k)) u.set(k, qs.get(k)); const t = u.toString(); history.replaceState(null, '', t ? '?' + t.replace(/%2C/g, ',').replace(/%3A/g, ':').replace(/%2F/g, '/') : location.pathname); } catch (_) {} }
   function link(code) { return location.origin + location.pathname + '?room=' + code; }
 
   // ---------------- lambs sync ----------------
@@ -1679,23 +1725,38 @@ void main(){
     addPlayer({ id: me.id, name: me.name, color: me.color });
     V.role = solo ? 'solo' : 'host'; V.code = code; V.hostId = me.id;
     if (!solo) {
-      net = Net.host(code, onHostMsg, st => { $('netState').textContent = netText(st); });
+      setNet.t0 = now(); setNet.last = { mqtt: 0, peer: false }; setNet(setNet.last);
+      net = Net.host(code, onHostMsg, st => { setNet.last = st; setNet(st); });
+      clearInterval(setNet.i); setNet.i = setInterval(() => { if (G && net) setNet(setNet.last); else clearInterval(setNet.i); }, 2000);
     }
     hostLoop.i && clearInterval(hostLoop.i); hostLoop.prev = now(); hostLoop.i = setInterval(hostLoop, 50);
   }
-  function netText(st) { return (st.mqtt || st.peer) ? `联机通道：${st.mqtt ? '中继 ' + st.mqtt + ' 条' : ''}${st.mqtt && st.peer ? ' · ' : ''}${st.peer ? '直连可用' : ''}` : '正在连接联机通道…'; }
+  const NETDBG = qs.get('netdbg') === '1';
+  function setNet(st) {
+    const e = $('netState'), ok = st.mqtt || st.peer, slow = !ok && now() - (setNet.t0 || 0) > 10000;
+    e.className = 'net ' + (ok ? 'ok' : slow ? 'bad' : 'wait');
+    e.innerHTML = '<i></i>' + (ok ? '连接良好，好友可以进来了' : slow ? '网络不太好，正在重试…' : '正在连接…') + (NETDBG ? ` <small>(中继 ${st.mqtt} · 直连 ${st.peer ? '可用' : '无'})</small>` : '');
+  }
   function freeColor(pref) { const used = Object.values(G.players).map(p => p.color); return !used.includes(pref) && COLORS.includes(pref) ? pref : COLORS.find(c => !used.includes(c)) || pref; }
+  // every lamb in a room gets its own name: a taken cute name is swapped for a free one, a custom name gets a number
+  function uniqName(nm, id) {
+    const used = Object.values(G.players).filter(p => p.id !== id).map(p => p.name);
+    if (!used.includes(nm)) return nm;
+    const pool = NAMES.filter(n => !used.includes(n));
+    if (NAMES.includes(nm) && pool.length) return pool[(Math.random() * pool.length) | 0];
+    for (let i = 2; ; i++) { const c = nm.slice(0, 7) + i; if (!used.includes(c)) return c; }
+  }
   function addPlayer(p) {
-    if (G.players[p.id]) { const q = G.players[p.id]; q.name = clampName(p.name); q.seen = now(); return q; }
+    if (G.players[p.id]) { const q = G.players[p.id]; const nm = uniqName(clampName(p.name), p.id); if (nm !== q.name) { q.name = nm; lobbyDirty(); } q.seen = now(); q.goneAt = 0; return q; }
     if (Object.keys(G.players).length >= 6) return null;
-    const q = G.players[p.id] = { id: p.id, name: clampName(p.name), color: freeColor(p.color), bot: !!p.bot, score: 0, u: 0.2 + Math.random() * 0.6, v: 0.25 + Math.random() * 0.6, seen: now(), skill: p.skill };
+    const q = G.players[p.id] = { id: p.id, name: uniqName(clampName(p.name), p.id), color: freeColor(p.color), bot: !!p.bot, score: 0, u: 0.2 + Math.random() * 0.6, v: 0.25 + Math.random() * 0.6, seen: now(), skill: p.skill };
     lobbyDirty(); return q;
   }
   function addBot() {
     const n = Object.keys(G.players).length; if (n >= 6) return;
     const used = Object.values(G.players).map(p => p.name);
     const nm = BOTN.find(b => !used.includes(b)) || '小羊';
-    addPlayer({ id: 'bot' + (++G.botN) + rid().slice(0, 3), name: nm, color: COLORS[(n * 2) % 6], bot: true, skill: 0.5 + Math.random() * 0.14 });
+    addPlayer({ id: 'bot' + (++G.botN) + rid().slice(0, 3), name: nm, color: COLORS.find(c => !Object.values(G.players).some(p => p.color === c)) || COLORS[(n * 2) % 6], bot: true, skill: 0.5 + Math.random() * 0.14 });
   }
   function lobbyDirty() { G.lastLobby = 0; }
   function lobbyMsg() { return { t: 'lobby', R: ROUND * 1000, code: G.code, host: me.id, phase: G.phase, players: Object.values(G.players).map(p => ({ id: p.id, name: p.name, color: p.color, bot: p.bot, score: p.score })) }; }
@@ -1704,7 +1765,7 @@ void main(){
     if (m.t === 'hi') {
       const p = addPlayer({ id: from, name: m.name, color: m.color });
       if (!p) { net.send({ t: 'full', to: from }, from); return; }
-      net.send({ t: 'w', to: from, color: p.color, code: G.code, e: G.ep }, from); net.send(Object.assign(lobbyMsg(), { e: G.ep })); net.send(Object.assign(stateMsg(now()), { e: G.ep, to: from }), from);
+      net.send({ t: 'w', to: from, color: p.color, name: p.name, ph: G.phase, code: G.code, e: G.ep }, from); net.send(Object.assign(lobbyMsg(), { e: G.ep })); net.send(Object.assign(stateMsg(now()), { e: G.ep, to: from }), from);
       return;
     }
     const p = G.players[from]; if (!p) { if (m.t !== 'bye') net.send({ t: 'who', to: from }, from); return; }
@@ -1713,7 +1774,15 @@ void main(){
     else if (m.t === 'pi') net.send({ t: 'po', to: from, c: m.c }, from);
     else if (m.t === 'c') { if (Number.isInteger(m.i)) claim(from, m.i); }
     else if (m.t === 'h') broadcast({ t: 'h', id: from });
-    else if (m.t === 'bye') { delete G.players[from]; net.forget(from); lobbyDirty(); }
+    else if (m.t === 'bye') {
+      if (m.soft) { p.goneAt = now(); return; }       // page is unloading (maybe a refresh): keep the seat for a few seconds
+      dropPlayer(from);
+    }
+  }
+  function dropPlayer(id) {
+    const p = G.players[id]; if (!p) return;
+    if (G.phase === 'count' || G.phase === 'play') (G.leftRound = G.leftRound || []).push({ id, name: p.name, color: p.color, score: p.score, bot: p.bot, left: true });
+    delete G.players[id]; net && net.forget(id); lobbyDirty();
   }
   function broadcast(m) { if (G) m.e = G.ep; if (net && V.role === 'host') net.send(m); onClientMsg(m, true); }
   // ---- movement budget: a client may not move faster than the speed limit (+ slack for jitter/bursts) ----
@@ -1761,7 +1830,7 @@ void main(){
   }
   function startRound() {
     broadcast(lobbyMsg());
-    G.ep++; G.claims = {}; G.rank = null;
+    G.ep++; G.claims = {}; G.rank = null; G.leftRound = []; G.endWhy = '';
     for (const p of Object.values(G.players)) { p.score = 0; p.u = 0.15 + Math.random() * 0.7; p.v = 0.3 + Math.random() * 0.55; p.target = null; p.bud = BUD_MAX; p.pt = 0; p.hist = []; }
     G.items = {}; G.phase = 'count'; G.countAt = now() + COUNT * 1000; G.endAt = G.countAt + ROUND * 1000; G.nextGust = G.countAt + 9000 + Math.random() * 4000; G.nextItem = 0; G.gust = null;
     for (let i = 0; i < 5; i++) spawnItem(true);
@@ -1771,13 +1840,19 @@ void main(){
   function spawnItem(pre) {
     const left = (G.endAt - now()) / 1000, gold = left < 10 ? 0.2 : 0.07, r = Math.random();
     const k = r < gold ? 2 : r < gold + 0.22 ? 1 : 0, id = G.itemId++;
-    G.items[id] = { id, k, u: 0.04 + Math.random() * 0.92, v: 0.04 + Math.random() * 0.92, age: pre ? 0.5 : 0, dead: false };
+    let u = 0.04 + Math.random() * 0.92, v = 0.04 + Math.random() * 0.92;
+    // small rooms have few lambs on a big meadow: drop part of the petals within a short run of a real player
+    const hum = Object.values(G.players).filter(p => !p.bot);
+    if (!pre && hum.length && Math.random() < 0.4) { const h = hum[(Math.random() * hum.length) | 0], a = Math.random() * 6.283, d = 0.12 + Math.random() * 0.2; u = Math.max(0.04, Math.min(0.96, h.u + Math.cos(a) * d)); v = Math.max(0.04, Math.min(0.96, h.v + Math.sin(a) * d)); }
+    G.items[id] = { id, k, u, v, age: pre ? 0.5 : 0, dead: false };
   }
   function hostLoop() {
     const t = now(), dt = Math.min(0.2, (t - hostLoop.prev) / 1000); hostLoop.prev = t;
     if (!G) return;
     // drop silent players (they closed the page)
-    for (const p of Object.values(G.players)) if (!p.bot && p.id !== me.id && t - p.seen > 12000) { delete G.players[p.id]; net && net.forget(p.id); lobbyDirty(); }
+    for (const p of Object.values(G.players)) if (!p.bot && p.id !== me.id && (t - p.seen > 12000 || (p.goneAt && t - p.goneAt > 9000))) dropPlayer(p.id);
+    // everyone else left mid-round: stop at once, the round does not count
+    if (!G.solo && (G.phase === 'count' || G.phase === 'play') && Object.keys(G.players).length < 2) { resolveClaims(t, true); endRound('left'); }
     // the host's own lamb
     const mp = G.players[me.id]; if (mp) { mp.u = S.lamb.u; mp.v = S.lamb.v; }
     if (G.phase === 'count' && t >= G.countAt) { G.phase = 'play'; lobbyDirty(); }
@@ -1785,8 +1860,8 @@ void main(){
     if (G.phase === 'play' || G.phase === 'count') {
       const play = G.phase === 'play', n = Object.keys(G.players).length;
       if (play) {
-        const alive = Object.values(G.items).filter(i => !i.dead).length, target = Math.min(16, 6 + n * 2);
-        if (t > G.nextItem && alive < target) { spawnItem(); G.nextItem = t + 250 + Math.random() * 450 * (alive / target); }
+        const alive = Object.values(G.items).filter(i => !i.dead).length, target = Math.min(16, 10 + n);
+        if (t > G.nextItem && alive < target) { spawnItem(); G.nextItem = t + 200 + Math.random() * 350 * (alive / target); }
         if (t > G.nextGust && t < G.endAt - 3000) {
           G.gust = { dir: Math.random() * 6.283, until: t + 3200 }; G.nextGust = t + 10000 + Math.random() * 5000;
           broadcast({ t: 'gust', dir: +G.gust.dir.toFixed(2), d: 3200 });
@@ -1803,15 +1878,15 @@ void main(){
         }
       }
       if (play) for (const b of Object.values(G.players)) if (b.bot) botStep(b, dt, t, gk);
-      if (play && t >= G.endAt) { resolveClaims(t, true); endRound(); }
+      if (G.phase === 'play' && t >= G.endAt) { resolveClaims(t, true); endRound(''); }
     } else {
       for (const b of Object.values(G.players)) if (b.bot) botIdle(b, dt, t);
     }
     if (t - G.lastSend > 95) { G.lastSend = t; broadcast(stateMsg(t)); }
-    if (t - G.lastLobby > 2000) { G.lastLobby = t; broadcast(lobbyMsg()); }
+    if (t - G.lastLobby > 2000) { G.lastLobby = t; broadcast(lobbyMsg()); saveSess(); }
   }
   function stateMsg(t) {
-    return { t: 's', ph: G.phase, R: ROUND * 1000, rk: G.phase === 'end' ? G.rank : undefined, rm: Math.max(0, Math.round(G.endAt - t)), cd: Math.max(0, Math.round(G.countAt - t)),
+    return { t: 's', ph: G.phase, R: ROUND * 1000, rk: G.phase === 'end' ? G.rank : undefined, why: G.phase === 'end' ? G.endWhy : undefined, rm: Math.max(0, Math.round(G.endAt - t)), cd: Math.max(0, Math.round(G.countAt - t)),
       P: Object.values(G.players).map(p => [p.id, +p.u.toFixed(3), +p.v.toFixed(3), p.score]),
       I: Object.values(G.items).filter(i => !i.dead).map(i => [i.id, i.k, +i.u.toFixed(3), +i.v.toFixed(3), +i.age.toFixed(2)]),
       g: G.gust && t < G.gust.until ? [+G.gust.dir.toFixed(2), Math.round(G.gust.until - t)] : 0 };
@@ -1845,10 +1920,11 @@ void main(){
     const dx = b.wan[0] - b.u, dy = b.wan[1] - b.v, d = Math.hypot(dx, dy);
     if (d > 0.01) { const st = Math.min(d, 0.12 * dt); b.u += dx / d * st; b.v += dy / d * st; }
   }
-  function endRound() {
-    G.phase = 'end'; G.gust = null; G.claims = {};
+  function endRound(why) {
+    G.phase = 'end'; G.gust = null; G.claims = {}; G.endWhy = why || '';
     const rank = Object.values(G.players).map(p => ({ id: p.id, name: p.name, color: p.color, score: p.score, bot: p.bot })).sort((a, b) => b.score - a.score);
-    G.rank = rank; broadcast({ t: 'end', rank }); lobbyDirty();
+    if (why === 'left') for (const q of G.leftRound || []) rank.push(q);    // shown greyed out under the board
+    G.rank = rank; broadcast({ t: 'end', rank, why: G.endWhy }); lobbyDirty();
   }
 
   // ================= CLIENT (also runs on host via broadcast) =================
@@ -1870,7 +1946,12 @@ void main(){
     }
     if (Number.isFinite(m.R) && m.R > 0) V.R = m.R;
     switch (m.t) {
-      case 'w': me.color = m.color; S.lamb.color = m.color; if (!V.joined) { V.joined = true; if (V.phase === 'lobby') { show('room'); renderRoom(); } setUrl(V.code); } break;
+      case 'w':
+        if (COLORS.includes(m.color)) { me.color = m.color; S.lamb.color = m.color; }
+        if (typeof m.name === 'string' && m.name) { me.name = m.name.slice(0, 9); S.lamb.name = me.name; $('jname').value = me.name; }
+        V.hostAway = 0;
+        if (!V.joined) { V.joined = true; if (V.phase === 'lobby' && (!m.ph || m.ph === 'lobby')) { show('room'); renderRoom(); } setUrl(V.code); }
+        saveSess(); break;
       case 'full': toast('房间已满（最多 6 只小羊）'); leave(); break;
       case 'who': if (net && net.send) net.send(hello()); break;
       case 'po': if (Number.isFinite(m.c)) { const r = now() - m.c; if (r >= 0 && r < 5000) V.rtt = V.rtt * 0.7 + r * 0.3; } break;
@@ -1900,7 +1981,7 @@ void main(){
           if (V.phase === 'end' && m.e === V.phEp) break;               // (cannot happen with a sane host; be safe)
           enterRound(m.cd, m.rm, m.P.map(q => [q[0], q[1], q[2]]));
         }
-        if (m.ph === 'end' && V.phase !== 'end' && Array.isArray(m.rk)) { if (V.phase !== 'lobby' || m.rk.some(r => r.id === me.id)) finishRound(m.rk); break; }
+        if (m.ph === 'end' && V.phase !== 'end' && Array.isArray(m.rk)) { if (V.phase !== 'lobby' || m.rk.some(r => r.id === me.id)) finishRound(m.rk, m.why); break; }
         if (m.ph === 'lobby' && V.role === 'client' && V.phase !== 'lobby') { enterRoomView(); break; }
         if (V.phase === 'end') break;                                  // final results are frozen
         if (m.ph === 'play' && V.phase === 'count') V.phase = 'play';
@@ -1932,8 +2013,8 @@ void main(){
       }
       case 'no': { const pr = V.pend[m.i]; if (pr) { delete V.pend[m.i]; undoPrediction(pr, false); } break; }
       case 'h': { const L = lambs[m.id]; if (L && m.id !== me.id) Scene.hop(L); break; }
-      case 'end': if (V.phase !== 'end' && Array.isArray(m.rank) && (V.phase !== 'lobby' || m.rank.some(r => r.id === me.id))) finishRound(m.rank); break;
-      case 'bye-host': if (V.role === 'client') { toast('房主离开了，房间已解散', 3500); leave(true); } break;
+      case 'end': if (V.phase !== 'end' && Array.isArray(m.rank) && (V.phase !== 'lobby' || m.rank.some(r => r.id === me.id))) finishRound(m.rank, m.why); break;
+      case 'bye-host': if (V.role === 'client') { if (m.soft) { V.hostAway = now(); toast('房主的页面刷新了，等一下…', 4000); } else { toast('房主离开了，房间已解散', 3500); leave(true); } } break;
     }
   }
   function enterRound(cd, rm, pos) {
@@ -1944,12 +2025,12 @@ void main(){
     const L = S.lamb, p = pos.find(q => q[0] === me.id); if (p) { L.u = p[1]; L.v = p[2]; [L.x, L.y] = Scene.toPx(L.u, L.v); L.mode = 'idle'; L.vx = L.vy = 0; }
     L.frozen = cd > 0; V.endFrozen = cd > 0; endFx.on = false; V.snap = true; show(null); $('toast').classList.add('hide'); hud(true); $('results').classList.add('hide'); boardKey = '';
   }
-  function finishRound(rank) {
-    trace('finish', V.ep, V.phase);
-    rollbackAll(); V.phEp = V.ep; V.phase = 'end'; V.rank = rank;
-    for (const r of rank) if (V.players[r.id]) V.players[r.id].score = r.score;
-    for (const id in V.players) if (id !== me.id && !rank.some(r => r.id === id)) delete V.players[id];
-    onEnd(rank);
+  function finishRound(rank, why) {
+    trace('finish', V.ep, V.phase, why || '');
+    rollbackAll(); V.phEp = V.ep; V.phase = 'end'; V.rank = rank; V.endWhy = why || '';
+    for (const r of rank) if (V.players[r.id] && !r.left) V.players[r.id].score = r.score;
+    for (const id in V.players) if (id !== me.id && !rank.some(r => r.id === id && !r.left)) delete V.players[id];
+    onEnd(rank, why);
   }
   function enterRoomView() { trace('room', V.ep, V.phase); rollbackAll(); V.phEp = V.ep; V.phase = 'lobby'; V.items = {}; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; hud(false); show('room'); renderRoom.k = ''; renderRoom(); }
   // ---- client-side prediction bookkeeping for pickups ----
@@ -2051,19 +2132,34 @@ void main(){
       FX.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 2.4 + Math.random() * 1.6, s: S.r0 * (0.07 + Math.random() * 0.08), c: cols[i % cols.length], a: Math.random() * 6, g: 1, spin: (Math.random() - 0.5) * 12, land: true });
     }
   }
-  function onEnd(rank) {
+  // outcome of a finished round, shared by the end sequence and the results card
+  function outcome(rank, why) {
+    const live = rank.filter(r => !r.left), w = live[0];
+    if (why === 'left' || !w) return { kind: 'void', title: '本局不算数', msg: '对手提前离开了，这局不分胜负' };
+    if (w.score === 0) return { kind: 'zero', title: '平局', msg: '谁都还没拾到花瓣，再来一局吧' };
+    const tied = live.filter(r => r.score === w.score);
+    if (tied.length > 1) return { kind: 'tie', title: '平局！', msg: tied.some(r => r.id === me.id) ? '和' + tied.filter(r => r.id !== me.id).map(r => r.name).join('、') + '打成平手' : tied.map(r => r.name).join('、') + ' 打成平手', tied };
+    return { kind: 'win', w, title: w.id === me.id ? '你赢啦！' : `${w.name} 赢了`, msg: '' };
+  }
+  function onEnd(rank, why) {
     hud(false); V.endFrozen = true; S.lamb.frozen = true; S.lamb.mode = 'idle';
-    const w = rank[0], tie = rank.length > 1 && rank[1].score === w.score;
-    endFx.on = true; endFx.t = 0; endFx.winner = w && lambs[w.id];
-    const cols = ['#f8bdd0', '#fff2f0', '#ffe28a', '#f6a9c1', w ? w.color : '#fff'];
-    if (endFx.winner) { confetti(endFx.winner.x, endFx.winner.y, 120, cols); Scene.hop(endFx.winner); }
+    const o = outcome(rank, why), won = o.kind === 'win' && o.w.id === me.id;
+    endFx.on = true; endFx.t = 0; endFx.winner = o.kind === 'win' ? lambs[o.w.id] : null;
     Wind.gustHold = 1.2; Wind.dir = -1.2;
-    const won = w && w.id === me.id && !tie;
-    Sfx.victory(won || (w && rank.findIndex(r => r.id === me.id) < 1));
-    $('count').textContent = ''; 
-    const title = $('rTitle'); title.textContent = !w ? '本局结束' : tie ? '平局！' : won ? '你赢啦！' : `${w.name} 赢了`;
-    setTimeout(() => { if (V.phase === 'end') showResults(rank); }, 2300);
-    if (!won && w) toast(tie ? '平局，再来一局分胜负' : `${w.name} 拾得最多`, 2000);
+    if (o.kind === 'win') {
+      if (endFx.winner) { confetti(endFx.winner.x, endFx.winner.y, 120, ['#f8bdd0', '#fff2f0', '#ffe28a', '#f6a9c1', o.w.color]); Scene.hop(endFx.winner); }
+      Sfx.victory(won);
+    } else if (o.kind === 'tie') {          // every tied lamb hops under a soft shower, no crown
+      for (const r of o.tied) { const L = lambs[r.id]; if (L) { confetti(L.x, L.y, 50, ['#f8bdd0', '#fff2f0', '#ffe28a']); Scene.hop(L); } }
+      Sfx.victory(o.tied.some(r => r.id === me.id));
+    } else {                                // void / nobody scored: just a calm breeze of petals, no celebration
+      for (let i = 0; i < 18; i++) FX.parts.push({ x: -20, y: Math.random() * S.h * 0.7, vx: S.r0 * (3 + Math.random() * 3), vy: S.r0 * (0.5 + Math.random()), life: 2.5 + Math.random(), s: S.r0 * (0.06 + Math.random() * 0.05), c: ['#f8bdd0', '#fff2f0'][i % 2], a: Math.random() * 6, g: 0.2, spin: (Math.random() - 0.5) * 6 });
+      Sfx.pop();
+    }
+    $('count').textContent = '';
+    $('rTitle').textContent = o.title;
+    setTimeout(() => { if (V.phase === 'end') showResults(rank, why); }, o.kind === 'void' ? 1200 : 2300);
+    if (o.kind === 'void') toast(o.msg, 2400); else if (!won) toast(o.kind === 'win' ? `${o.w.name} 拾得最多` : o.msg, 2000);
   }
   function avatar(color, size = 132) {
     const c = document.createElement('canvas'); c.width = c.height = size; const g = c.getContext('2d'), r = size * 0.3, cx = size / 2, cy = size * 0.52;
@@ -2080,10 +2176,15 @@ void main(){
     g.fillStyle = '#fffaf1'; for (let i = 0; i < 5; i++) { g.beginPath(); g.arc(cx + (i - 2) * r * 0.2, cy - r * 0.78 + Math.abs(i - 2) * r * 0.06, r * 0.17, 0, 6.283); g.fill(); }
     return c;
   }
-  function showResults(rank) {
+  function showResults(rank0, why) {
     trace('results', V.ep);
     show('results');
-    const pod = $('podium'); pod.innerHTML = '';
+    const o = outcome(rank0, why), rank = rank0.filter(r => !r.left), gone = rank0.filter(r => r.left);
+    const pod = $('podium'); pod.innerHTML = ''; pod.classList.toggle('hide', o.kind === 'void'); $('rSub').textContent = o.kind === 'win' ? '' : o.msg; $('rSub').classList.toggle('hide', o.kind === 'win');
+    if (o.kind === 'void') {
+      $('rlist').innerHTML = rank0.map(r => `<li class="${r.id === me.id ? 'me' : ''}${r.left ? ' gone' : ''}"><em>·</em><i style="background:${r.color}"></i><span>${esc(r.name)}${r.id === me.id ? '（你）' : ''}${r.left ? '（已离开）' : ''}</span><b>${r.score}</b></li>`).join('');
+      resultButtons(); return;
+    }
     const place = rank.map((r, i) => rank.findIndex(x => x.score === r.score)); const CN = ['第一', '第二', '第三', '第四', '第五', '第六'];
     const order = [rank[1], rank[0], rank[2]], pi = [1, 0, 2], H = [0.62, 1, 0.44], lab = pi.map(k => rank[k] ? (place.filter(x => x === place[k]).length > 1 ? '并列' : '') + CN[place[k]] : '');
     order.forEach((r, i) => {
@@ -2093,12 +2194,17 @@ void main(){
       d.insertAdjacentHTML('beforeend', `<div class="pn">${esc(r.name)}${r.id === me.id ? '（你）' : ''}</div><div class="blk" style="height:${Math.round(H[i] * 110)}px;animation-delay:${[0.25, 0.05, 0.45][i]}s"><span><b data-n="${r.score}">0</b><small>${lab[i]}</small></span></div>`);
       pod.appendChild(d);
     });
-    $('rlist').innerHTML = rank.slice(3).map((r, i) => `<li class="${r.id === me.id ? 'me' : ''}"><em>${place[i + 3] + 1}</em><i style="background:${r.color}"></i><span>${esc(r.name)}</span><b>${r.score}</b></li>`).join('');
+    $('rlist').innerHTML = rank.slice(3).map((r, i) => `<li class="${r.id === me.id ? 'me' : ''}"><em>${place[i + 3] + 1}</em><i style="background:${r.color}"></i><span>${esc(r.name)}</span><b>${r.score}</b></li>`).join('')
+      + gone.map(r => `<li class="gone"><em>·</em><i style="background:${r.color}"></i><span>${esc(r.name)}（已离开）</span><b>${r.score}</b></li>`).join('');
+    if (o.kind === 'zero' || o.kind === 'tie') for (const b of pod.querySelectorAll('.pod.p1')) b.classList.add('tie');
     const t0 = now(); (function count() { const q = Math.min(1, (now() - t0) / 900); for (const b of pod.querySelectorAll('b[data-n]')) b.textContent = Math.round(+b.dataset.n * (1 - Math.pow(1 - q, 3))); if (q < 1) requestAnimationFrame(count); })();
-    const hostish = V.role !== 'client';
-    $('bAgain').classList.toggle('hide', !hostish); $('bLobby').textContent = V.role === 'solo' ? '回主页' : hostish ? '回到房间' : '离开';
-    $('rMsg').textContent = hostish ? '' : '等房主开下一局…';
+    resultButtons();
     for (let i = 0; i < 4; i++) setTimeout(() => Sfx.pop(), 250 + i * 160);
+  }
+  function resultButtons() {
+    const hostish = V.role !== 'client', alone = V.role === 'host' && G && Object.keys(G.players).length < 2;
+    $('bAgain').classList.toggle('hide', !hostish); $('bAgain').disabled = alone; $('bLobby').textContent = V.role === 'solo' ? '回主页' : hostish ? '回到房间' : '离开';
+    $('rMsg').textContent = !hostish ? '等房主开下一局…' : alone ? '回到房间，等好友或加机器人再开' : '';
   }
 
   // ---------------- per-frame FX + labels ----------------
@@ -2186,11 +2292,12 @@ void main(){
   // ---------------- menu / room UI ----------------
   function renderSw(sel) { $('sw').innerHTML = COLORS.map(c => `<button data-c="${c}" class="${c === me.color ? 'on' : ''}" style="background:${c}" aria-label="围巾颜色"></button>`).join(''); }
   $('sw').addEventListener('click', e => { const c = e.target.dataset && e.target.dataset.c; if (!c) return; me.color = c; store.set('color', c); S.lamb.color = c; renderSw(); Scene.hop(); Sfx.unlock(); Sfx.pop(); });
-  function setName(v) { me.name = clampName(v); store.set('name', me.name); S.lamb.name = me.name; }
+  // only a name the player typed is remembered for next time; random ones stay random per visit
+  function setName(v, keep) { const n = clampName(v); if (keep || n !== me.name) { if (keep && !NAMES.includes(n)) store.set('name', n); else if (keep) store.set('name', null); } me.name = n; S.lamb.name = me.name; }
   $('name').value = me.name; $('jname').value = me.name;
-  $('name').addEventListener('change', e => setName(e.target.value)); $('jname').addEventListener('change', e => setName(e.target.value));
-  $('dice').onclick = () => { const n = pickName(); $('name').value = n; setName(n); Sfx.unlock(); Sfx.pop(); };
-  $('jdice').onclick = () => { const n = pickName(); $('jname').value = n; setName(n); Sfx.unlock(); Sfx.pop(); };
+  $('name').addEventListener('change', e => setName(e.target.value, true)); $('jname').addEventListener('change', e => setName(e.target.value, true));
+  $('dice').onclick = () => { const n = pickName(); $('name').value = n; setName(n, true); Sfx.unlock(); Sfx.pop(); };
+  $('jdice').onclick = () => { const n = pickName(); $('jname').value = n; setName(n, true); Sfx.unlock(); Sfx.pop(); };
   function renderRoom() {
     if (V.phase !== 'lobby' && V.phase !== 'menu') return;
     $('roomCode').textContent = V.code;
@@ -2203,6 +2310,7 @@ void main(){
     $('roomMsg').textContent = host ? (ps.length < 2 ? '至少两只小羊才能开始，可以先加机器人' : `${ps.length} 只小羊准备好了`) : '等房主开始…';
     $('bCopy').parentElement.classList.toggle('hide', !host); $('shareTip').classList.toggle('hide', !host);
     $('netState').classList.toggle('hide', !host);
+    $('shareTip').classList.toggle('done', ps.length >= 2);
   }
   $('plist').addEventListener('click', e => { const k = e.target.dataset && e.target.dataset.k; if (k && G) { delete G.players[k]; lobbyDirty(); hostLoop(); } });
   $('bBot').onclick = () => { if (G) { addBot(); hostLoop(); Sfx.pop(); } };
@@ -2221,29 +2329,42 @@ void main(){
   $('bCreate').onclick = () => { Sfx.unlock(); setName($('name').value); resetView(); newHost(makeCode(), false); setUrl(V.code); V.players = {}; enterLobby(); hostLoop(); renderRoom(); };
   $('bSolo').onclick = () => { Sfx.unlock(); setName($('name').value); resetView(); newHost('SOLO', true); for (let i = 0; i < 3; i++) addBot(); hostLoop(); V.phase = 'lobby'; $('bExit').classList.remove('hide'); startRound(); };
   $('bCode').onclick = () => { $('codeRow').classList.toggle('hide'); $('codeIn').focus(); };
-  $('bJoinCode').onclick = () => { const c = $('codeIn').value.toUpperCase().replace(/[^A-Z]/g, ''); if (c.length !== 4) { toast('房间码是四个字母'); return; } Sfx.unlock(); setName($('name').value); join(c); };
+  $('bJoinCode').onclick = () => { const c = $('codeIn').value.toUpperCase().replace(/[^A-Z]/g, ''); if (c.length !== 4) { toast('房间码是四个字母'); return; } Sfx.unlock(); setName($('name').value); $('jname').value = me.name; join(c, { from: 'code' }); };
   $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('bJoinCode').click(); });
-  $('bJoin').onclick = () => { Sfx.unlock(); setName($('jname').value); join(V.code); };
+  $('bJoin').onclick = () => { Sfx.unlock(); setName($('jname').value); join(V.code, { from: V.joinFrom || 'link' }); };
   $('bJoinBack').onclick = () => { setUrl(''); toMenu(); };
   $('bAgain').onclick = () => { if (G) { startRound(); } };
   $('bLobby').onclick = () => { if (V.role === 'solo' || V.role === 'client') { leave(); return; } if (G) { G.phase = 'lobby'; G.ep++; G.items = {}; G.claims = {}; lobbyDirty(); V.phase = 'lobby'; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; enterLobby(); renderRoom(); broadcast(lobbyMsg()); } };
   $('bExit').onclick = () => leave();
   function resetView() { V.ep = -1; V.phEp = -1; V.pkSeen = {}; V.pend = {}; V.joinedOnce = false; V.R = ROUND * 1000; V.players = {}; V.items = {}; V.rank = null; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; FX.texts.length = 0; }
-  function join(code) {
-    resetView(); V.role = 'client'; V.code = code; V.phase = 'lobby'; V.joined = false;
-    $('joinMsg').textContent = '正在进入房间…'; show('join'); $('joinCode').textContent = code; $('bJoin').disabled = true;
-    net = Net.join(code, me.id, hello, m => onClientMsg(m), why => {
-      if (V.role !== 'client') return;
-      if (why === 'timeout') { $('bJoin').disabled = false; $('bJoin').textContent = '再试一次'; $('joinMsg').textContent = '没找到房间：房主可能还在微信里没回到游戏页，或房间已关闭。'; net.close(); net = null; }
+  function joinHead(from) {
+    V.joinFrom = from; $('joinFrom').textContent = from === 'link' ? '好友邀请你来' : from === 'rejoin' ? '回到刚才的房间' : '加入房间';
+  }
+  function join(code, opt) {
+    opt = opt || {}; if (net) { try { net.close(); } catch (_) {} net = null; }
+    resetView(); V.role = 'client'; V.code = code; V.phase = 'lobby'; V.joined = false; V.hostAway = 0;
+    joinHead(opt.from || 'link');
+    $('joinMsg').textContent = opt.from === 'rejoin' ? '正在回到房间…' : '正在进入房间…'; $('joinMsg').classList.remove('err');
+    show('join'); $('joinCode').textContent = code; $('bJoin').disabled = true; $('bJoin').textContent = '进入房间';
+    const mine = net = Net.join(code, me.id, hello, m => onClientMsg(m), why => {
+      if (V.role !== 'client' || net !== mine) return;
+      if (why === 'timeout' || why === 'nonet') {
+        if (V.joined) { toast('和房主失去联系了，房间可能已经关闭', 3500); leave(true); return; }
+        $('bJoin').disabled = false; $('bJoin').textContent = '再试一次'; $('joinMsg').classList.add('err');
+        $('joinMsg').textContent = why === 'nonet' ? '连不上联机服务器。换个网络（比如关掉 Wi‑Fi 用 4G）再试。'
+          : opt.from === 'code' ? `没有找到房间 ${code}。请核对四个字母，或者让房主回到游戏页面后再试。` : '没找到房间：房主可能还没回到游戏页，或者房间已经关闭。';
+        net.close(); net = null; ss.del('sess');
+      } else if (V.joined && !join.relost) { join.relost = 1; toast('连接断了，正在重连…', 2500); join(code, { from: 'rejoin', slow: true }); }
       else { toast('和房主断开了', 3000); leave(); }
-    });
+    }, { slow: !!opt.slow || opt.from === 'rejoin' });
+    if (opt.from !== 'rejoin') join.relost = 0;
     $('bExit').classList.remove('hide');
     clearInterval(join.i); join.i = setInterval(() => {
       if (V.role !== 'client' || !net) return;
       const t = now();
       if (V.joined) sendUp({ t: 'p', u: +S.lamb.u.toFixed(4), v: +S.lamb.v.toFixed(4), r: Math.round(V.rtt) });
       if (V.joined && t - (join.pi || 0) > 2000) { join.pi = t; sendUp({ t: 'pi', c: Math.round(t) }); }
-      if (V.joined && t - V.last > 20000) { toast('和房主失去联系了，房间可能已经关闭', 3500); leave(true); return; }
+      if (V.joined && (t - V.last > 20000 || (V.hostAway && t - V.last > 14000))) { toast('和房主失去联系了，房间可能已经关闭', 3500); leave(true); return; }
       if (V.joined && t - V.last > 6000 && t - (join.re || 0) > 3000) { join.re = t; toast('连接不稳定，正在重连…', 2000); net.send(hello()); }
     }, 80);
   }
@@ -2253,10 +2374,17 @@ void main(){
       for (const d of [0, 120, 260]) setTimeout(() => { try { n.send(msg); } catch (_) {} }, d);
       setTimeout(() => n.close(), 400); net = null;
     }
-    clearInterval(hostLoop.i); clearInterval(join.i); G = null; V.role = 'none'; resetView(); setUrl(''); toMenu();
+    ss.del('sess'); clearInterval(hostLoop.i); clearInterval(join.i); clearInterval(setNet.i); G = null; V.role = 'none'; resetView(); setUrl(''); toMenu();
+  }
+  // what a refresh needs to bring this tab back into the same room as the same lamb
+  function saveSess() {
+    if (V.role !== 'host' && V.role !== 'client') return;
+    ss.set('sess', { code: V.code, role: V.role, name: me.name, color: me.color, ep: G ? G.ep : 0, t: Date.now(),
+      bots: G ? Object.values(G.players).filter(p => p.bot).map(p => ({ id: p.id, name: p.name, color: p.color, skill: p.skill })) : [] });
   }
   function toMenu() { V.phase = 'menu'; V.players = {}; syncLambs(); show('menu'); hud(false); $('bExit').classList.add('hide'); $('name').value = me.name; renderSw(); }
-  addEventListener('pagehide', () => { if (net) try { net.send(V.role === 'host' ? { t: 'bye-host' } : { t: 'bye', from: me.id }); } catch (_) {} });
+  // unloading may be a refresh: say a *soft* goodbye (the seat is kept a few seconds); the ✕ button says the real one
+  addEventListener('pagehide', () => { saveSess(); if (net) try { net.send(V.role === 'host' ? { t: 'bye-host', soft: 1 } : { t: 'bye', from: me.id, soft: 1 }); } catch (_) {} });
 
   // ---------------- audio toggles ----------------
   const syncTog = () => { $('bMusic').classList.toggle('off', !Sfx.music); $('bSfx').classList.toggle('off', !Sfx.sfx); };
@@ -2330,10 +2458,17 @@ void main(){
   // ---------------- boot ----------------
   renderSw(); S.lamb.color = me.color; S.lamb.name = '';
   const rc = (qs.get('room') || '').toUpperCase().replace(/[^A-Z]/g, '');
-  if (rc.length === 4) {
-    V.code = rc; $('joinCode').textContent = rc; $('jname').value = me.name; show('join');
-    if (qs.get('autojoin') === '1') join(rc);
-  } else show('menu');
+  const sess = sess0 && sess0.code === rc && Date.now() - sess0.t < 20 * 60e3 ? sess0 : null;
+  if (rc.length === 4 && sess && sess.role === 'host') {
+    // the host refreshed: reopen the same room (a round in progress restarts from the lobby), friends reconnect by themselves
+    resetView(); newHost(rc, false); G.ep = (sess.ep | 0) + 1;
+    for (const b of sess.bots || []) addPlayer({ id: b.id, name: b.name, color: b.color, bot: true, skill: b.skill || 0.55 });
+    V.players = {}; enterLobby(); hostLoop(); renderRoom(); toast('已回到房间', 2000);
+  } else if (rc.length === 4) {
+    V.code = rc; $('joinCode').textContent = rc; $('jname').value = me.name; joinHead(sess ? 'rejoin' : 'link'); show('join');
+    if (sess && sess.role === 'client') join(rc, { from: 'rejoin' });
+    else if (qs.get('autojoin') === '1') join(rc);
+  } else { ss.del('sess'); show('menu'); }
   if (qs.get('autostart') === 'solo') $('bSolo').click();
 })();
 
