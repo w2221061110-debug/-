@@ -1834,7 +1834,7 @@ void main(){
     for (const p of Object.values(G.players)) { p.score = 0; p.u = 0.15 + Math.random() * 0.7; p.v = 0.3 + Math.random() * 0.55; p.target = null; p.bud = BUD_MAX; p.pt = 0; p.hist = []; }
     G.items = {}; G.phase = 'count'; G.countAt = now() + COUNT * 1000; G.endAt = G.countAt + ROUND * 1000; G.nextGust = G.countAt + 9000 + Math.random() * 4000; G.nextItem = 0; G.gust = null;
     for (let i = 0; i < 5; i++) spawnItem(true);
-    broadcast({ t: 'start', c: COUNT * 1000, r: ROUND * 1000, R: ROUND * 1000, pos: Object.values(G.players).map(p => [p.id, +p.u.toFixed(3), +p.v.toFixed(3)]) });
+    broadcast({ t: 'start', ht: Math.round(now()), ea: Math.round(G.endAt), ca: Math.round(G.countAt), c: COUNT * 1000, r: ROUND * 1000, R: ROUND * 1000, pos: Object.values(G.players).map(p => [p.id, +p.u.toFixed(3), +p.v.toFixed(3)]) });
     lobbyDirty();
   }
   function spawnItem(pre) {
@@ -1886,7 +1886,7 @@ void main(){
     if (t - G.lastLobby > 2000) { G.lastLobby = t; broadcast(lobbyMsg()); saveSess(); }
   }
   function stateMsg(t) {
-    return { t: 's', ph: G.phase, R: ROUND * 1000, rk: G.phase === 'end' ? G.rank : undefined, why: G.phase === 'end' ? G.endWhy : undefined, rm: Math.max(0, Math.round(G.endAt - t)), cd: Math.max(0, Math.round(G.countAt - t)),
+    return { t: 's', ht: Math.round(t), ea: Math.round(G.endAt), ca: Math.round(G.countAt), ph: G.phase, R: ROUND * 1000, rk: G.phase === 'end' ? G.rank : undefined, why: G.phase === 'end' ? G.endWhy : undefined, rm: Math.max(0, Math.round(G.endAt - t)), cd: Math.max(0, Math.round(G.countAt - t)),
       P: Object.values(G.players).map(p => [p.id, +p.u.toFixed(3), +p.v.toFixed(3), p.score]),
       I: Object.values(G.items).filter(i => !i.dead).map(i => [i.id, i.k, +i.u.toFixed(3), +i.v.toFixed(3), +i.age.toFixed(2)]),
       g: G.gust && t < G.gust.until ? [+G.gust.dir.toFixed(2), Math.round(G.gust.until - t)] : 0 };
@@ -1923,7 +1923,7 @@ void main(){
   function endRound(why) {
     G.phase = 'end'; G.gust = null; G.claims = {}; G.endWhy = why || '';
     const rank = Object.values(G.players).map(p => ({ id: p.id, name: p.name, color: p.color, score: p.score, bot: p.bot })).sort((a, b) => b.score - a.score);
-    if (why === 'left') for (const q of G.leftRound || []) rank.push(q);    // shown greyed out under the board
+    for (const q of G.leftRound || []) rank.push(q);    // leavers are shown greyed out under the board (void or not)
     G.rank = rank; broadcast({ t: 'end', rank, why: G.endWhy }); lobbyDirty();
   }
 
@@ -1973,7 +1973,7 @@ void main(){
         if (V.phase === 'menu' || V.phase === 'lobby') { renderRoom(); }
         syncLambs(); break;
       }
-      case 'start': enterRound(m.c, m.c + m.r, m.pos); break;
+      case 'start': enterRound(m.c, m.c + m.r, m.pos); clockSync(m); break;
       case 's': {
         if (V.phase === 'menu' || !Array.isArray(m.P)) break;
         // ---- snapshot recovery: a lost 'start' / 'end' / 'lobby' is repaired from the periodic state ----
@@ -1985,7 +1985,7 @@ void main(){
         if (m.ph === 'lobby' && V.role === 'client' && V.phase !== 'lobby') { enterRoomView(); break; }
         if (V.phase === 'end') break;                                  // final results are frozen
         if (m.ph === 'play' && V.phase === 'count') V.phase = 'play';
-        if (m.ph === 'play' || m.ph === 'count') { V.endAt = now() + m.rm; V.countAt = now() + m.cd; }
+        if (m.ph === 'play' || m.ph === 'count') clockSync(m);
         if (m.P.length) for (const id in V.players) if (id !== me.id && !m.P.some(q => q[0] === id)) { if (V.role !== 'solo') toast(`${V.players[id].name} 离开了`, 2200); delete V.players[id]; }   // left mid-round
         for (const [id, u, v, sc] of m.P) { const p = V.players[id]; if (!p) continue; if (id !== me.id) { p.u = u; p.v = v; } if (sc > (p.score || 0) || V.phase === 'lobby') { if (p.score !== sc) p.bump = now(); p.score = sc; } }
         if (V.phase === 'count' || V.phase === 'play') {
@@ -2014,12 +2014,30 @@ void main(){
       case 'no': { const pr = V.pend[m.i]; if (pr) { delete V.pend[m.i]; undoPrediction(pr, false); } break; }
       case 'h': { const L = lambs[m.id]; if (L && m.id !== me.id) Scene.hop(L); break; }
       case 'end': if (V.phase !== 'end' && Array.isArray(m.rank) && (V.phase !== 'lobby' || m.rank.some(r => r.id === me.id))) finishRound(m.rank, m.why); break;
-      case 'bye-host': if (V.role === 'client') { if (m.soft) { V.hostAway = now(); toast('房主的页面刷新了，等一下…', 4000); } else { toast('房主离开了，房间已解散', 3500); leave(true); } } break;
+      case 'bye-host': if (V.role === 'client') { if (m.soft) { V.hostAway = now(); toast('房主的页面刷新了，等一下…', 4000); } else hostGone('房主离开了，房间已解散'); } break;
     }
+  }
+  // host clock -> local clock. sample = hostNow - localNow = offset - latency (latency >= 0), so the
+  // true offset is near the *largest* samples: rise quickly toward a bigger sample, sink very slowly.
+  function clockSync(m) {
+    if (!Number.isFinite(m.ht) || !Number.isFinite(m.ea)) { if (Number.isFinite(m.rm)) { V.endAt = now() + m.rm; V.countAt = now() + (m.cd || 0); } return; }
+    const smp = m.ht - now();
+    if (V.off == null || Math.abs(smp - V.off) > 4000) V.off = smp;      // first sample, or a different host clock (host reopened the room)
+    else V.off += (smp - V.off) * (smp > V.off ? 0.35 : 0.01);
+    V.endAt = m.ea - V.off; V.countAt = m.ca - V.off;
+  }
+  // displayed remaining time: ticks down with the local clock, may catch up downward (max 3x), never goes back up
+  function shownRm(t) {
+    const raw = Math.max(0, V.endAt - t);
+    if (V.dispEp !== V.phEp || V.disp == null) { V.dispEp = V.phEp; V.disp = raw; V.dispT = t; return raw; }
+    const el = Math.max(0, t - V.dispT); V.dispT = t;
+    let d = V.disp - el;
+    if (raw < d) d = Math.max(raw, V.disp - el * 3);
+    V.disp = Math.max(0, d); return V.disp;
   }
   function enterRound(cd, rm, pos) {
     trace('round', V.ep, cd, rm);
-    rollbackAll(); V.phEp = V.ep; V.items = {}; V.rank = null; V.phase = cd > 0 ? 'count' : 'play'; V.countAt = now() + cd; V.endAt = now() + rm; V.cdShown = cd > 0 ? -1 : 0; V.lastTick = -1;
+    rollbackAll(); V.phEp = V.ep; V.items = {}; V.rank = null; V.phase = cd > 0 ? 'count' : 'play'; V.countAt = now() + cd; V.endAt = now() + rm; V.disp = null; V.cdShown = cd > 0 ? -1 : 0; V.lastTick = -1;
     for (const [id, u, v] of pos) if (V.players[id]) { V.players[id].u = u; V.players[id].v = v; V.players[id].score = 0; }
     for (const id in V.players) V.players[id].score = 0;
     const L = S.lamb, p = pos.find(q => q[0] === me.id); if (p) { L.u = p[1]; L.v = p[2]; [L.x, L.y] = Scene.toPx(L.u, L.v); L.mode = 'idle'; L.vx = L.vy = 0; }
@@ -2028,7 +2046,8 @@ void main(){
   function finishRound(rank, why) {
     trace('finish', V.ep, V.phase, why || '');
     rollbackAll(); V.phEp = V.ep; V.phase = 'end'; V.rank = rank; V.endWhy = why || '';
-    for (const r of rank) if (V.players[r.id] && !r.left) V.players[r.id].score = r.score;
+    for (const r of rank) if (V.players[r.id] && !r.left) V.players[r.id].score = r.score;      // the host's result is the only truth
+    { const mr = rank.find(r => r.id === me.id); $('mscore').textContent = mr ? mr.score : 0; boardKey = ''; }
     for (const id in V.players) if (id !== me.id && !rank.some(r => r.id === id && !r.left)) delete V.players[id];
     onEnd(rank, why);
   }
@@ -2039,7 +2058,8 @@ void main(){
     const [x, y] = pr.xy; FX.texts.push({ x, y: y - S.r0 * 0.5, txt: stolen ? '被抢先了' : '差一点', c: '#fff8e6', life: 0.9, small: true });
     const it = V.items[pr.iid]; if (it && !V.pkSeen[pr.iid]) { delete V.items[pr.iid]; }   // the next snapshot re-adds it if it still exists
   }
-  function rollbackAll() { for (const k in V.pend) { for (const f of FX.texts) if (f.iid === +k) f.life = 0; } V.pend = {}; }
+  // unconfirmed local pickups are undone *visibly* ("差一点"), never silently kept
+  function rollbackAll() { const ps = Object.values(V.pend); V.pend = {}; for (const pr of ps) undoPrediction(pr, false); }
   function hello() { return { t: 'hi', from: me.id, name: me.name, color: me.color }; }
   function sendUp(m) { m.from = me.id; if (V.role === 'client') net && net.send(m); else if (G) onHostMsg(m, me.id); }
 
@@ -2081,7 +2101,7 @@ void main(){
         const fy = y - fall * fall * ir * 9, fx = x - fall * ir * 3 * Math.sin(it.id);
         drawItem(g, it, fx, fy, ir * (1 + fall * 0.5), t, 1 - fall * 0.4, fall);
       }
-      if (layer === 1 && !it.dead && it.age > 0.55 && !V.endFrozen && V.phase === 'play') {
+      if (layer === 1 && !it.dead && it.age > 0.55 && !V.endFrozen && V.phase === 'play' && now() < V.endAt - 60) {
         const L = S.lamb, d = Math.hypot(L.x - x, L.y - y);
         if (d < L.r * 0.95 + ir) {
           V.pend[it.id] = { iid: it.id, t: now(), xy: [x, y] }; sendUp({ t: 'c', i: it.id });
@@ -2135,7 +2155,7 @@ void main(){
   // outcome of a finished round, shared by the end sequence and the results card
   function outcome(rank, why) {
     const live = rank.filter(r => !r.left), w = live[0];
-    if (why === 'left' || !w) return { kind: 'void', title: '本局不算数', msg: '对手提前离开了，这局不分胜负' };
+    if (why === 'left' || !w) return { kind: 'void', title: '本局不算数', msg: '有人提前离开了，这局不分胜负' };
     if (w.score === 0) return { kind: 'zero', title: '平局', msg: '谁都还没拾到花瓣，再来一局吧' };
     const tied = live.filter(r => r.score === w.score);
     if (tied.length > 1) return { kind: 'tie', title: '平局！', msg: tied.some(r => r.id === me.id) ? '和' + tied.filter(r => r.id !== me.id).map(r => r.name).join('、') + '打成平手' : tied.map(r => r.name).join('、') + ' 打成平手', tied };
@@ -2204,7 +2224,7 @@ void main(){
   function resultButtons() {
     const hostish = V.role !== 'client', alone = V.role === 'host' && G && Object.keys(G.players).length < 2;
     $('bAgain').classList.toggle('hide', !hostish); $('bAgain').disabled = alone; $('bLobby').textContent = V.role === 'solo' ? '回主页' : hostish ? '回到房间' : '离开';
-    $('rMsg').textContent = !hostish ? '等房主开下一局…' : alone ? '回到房间，等好友或加机器人再开' : '';
+    $('rMsg').textContent = !hostish ? (net ? '等房主开下一局…' : '房主已离开，房间关闭了') : alone ? '回到房间，等好友或加机器人再开' : '';
   }
 
   // ---------------- per-frame FX + labels ----------------
@@ -2275,7 +2295,7 @@ void main(){
     }
     if (V.phase === 'play' && V.cdShown > 0 && t >= V.countAt) { const e = $('count'); V.cdShown = 0; e.textContent = '开始'; e.classList.remove('go'); e.offsetWidth; e.classList.add('go'); Sfx.tick(true); }
     if (V.phase === 'play') { S.lamb.frozen = false; V.endFrozen = false; }
-    const rm = V.phase === 'count' ? V.R : Math.max(0, V.endAt - t), sec = Math.ceil(rm / 1000);
+    const rm = V.phase === 'count' ? V.R : shownRm(t), sec = Math.ceil(rm / 1000);
     $('tnum').textContent = `${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}`;
     $('tbar').style.transform = `scaleX(${Math.min(1, rm / V.R)})`;
     const hurry = V.phase === 'play' && sec <= 10; $('timer').classList.toggle('hurry', hurry);
@@ -2336,7 +2356,17 @@ void main(){
   $('bAgain').onclick = () => { if (G) { startRound(); } };
   $('bLobby').onclick = () => { if (V.role === 'solo' || V.role === 'client') { leave(); return; } if (G) { G.phase = 'lobby'; G.ep++; G.items = {}; G.claims = {}; lobbyDirty(); V.phase = 'lobby'; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; enterLobby(); renderRoom(); broadcast(lobbyMsg()); } };
   $('bExit').onclick = () => leave();
-  function resetView() { V.ep = -1; V.phEp = -1; V.pkSeen = {}; V.pend = {}; V.joinedOnce = false; V.R = ROUND * 1000; V.players = {}; V.items = {}; V.rank = null; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; FX.texts.length = 0; }
+  function resetView() { V.off = null; V.disp = null; V.ep = -1; V.phEp = -1; V.pkSeen = {}; V.pend = {}; V.joinedOnce = false; V.R = ROUND * 1000; V.players = {}; V.items = {}; V.rank = null; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; FX.texts.length = 0; }
+  // host is gone: a round in progress is void for everyone (same rule as when a joiner leaves), then back to the menu
+  function hostGone(msg) {
+    if (V.role !== 'client' || hostGone.on) return;
+    if (V.phase === 'count' || V.phase === 'play') {
+      hostGone.on = true; if (net) { try { net.close(); } catch (_) {} net = null; } clearInterval(join.i);
+      const rank = Object.values(V.players).map(p => ({ id: p.id, name: p.name, color: p.color, score: p.score || 0, bot: p.bot, left: p.id === V.hostId })).sort((a, b) => b.score - a.score);
+      finishRound(rank, 'left'); $('rMsg').textContent = '房间已关闭';
+      setTimeout(() => { hostGone.on = false; if (V.role === 'client' && !net) { toast(msg, 3500); leave(true); } }, 5200);
+    } else { toast(msg, 3500); leave(true); }
+  }
   function joinHead(from) {
     V.joinFrom = from; $('joinFrom').textContent = from === 'link' ? '好友邀请你来' : from === 'rejoin' ? '回到刚才的房间' : '加入房间';
   }
@@ -2364,7 +2394,7 @@ void main(){
       const t = now();
       if (V.joined) sendUp({ t: 'p', u: +S.lamb.u.toFixed(4), v: +S.lamb.v.toFixed(4), r: Math.round(V.rtt) });
       if (V.joined && t - (join.pi || 0) > 2000) { join.pi = t; sendUp({ t: 'pi', c: Math.round(t) }); }
-      if (V.joined && (t - V.last > 20000 || (V.hostAway && t - V.last > 14000))) { toast('和房主失去联系了，房间可能已经关闭', 3500); leave(true); return; }
+      if (V.joined && (t - V.last > 20000 || (V.hostAway && t - V.last > 14000))) { hostGone('和房主失去联系了，房间可能已经关闭'); return; }
       if (V.joined && t - V.last > 6000 && t - (join.re || 0) > 3000) { join.re = t; toast('连接不稳定，正在重连…', 2000); net.send(hello()); }
     }, 80);
   }
