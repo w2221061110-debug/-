@@ -1536,6 +1536,8 @@ void main(){
       // a client whose relay object was replaced after a reconnect is still reachable through the new one (handled in mk)
       for (const c of new Set(Object.values(H.conns))) if (c.open) c.send(m);
     };
+    // explicit goodbye: every live relay and every direct link, so no client misses it whichever relay it is on
+    H.sendAll = m => { if (LOSS && Math.random() < LOSS) return; for (const r of H.relays) if (r.ok) r.publish(dn, m); for (const c of new Set(Object.values(H.conns))) if (c.open) c.send(m); };
     H.forget = id => { delete H.via[id]; delete H.conns[id]; };
     H.close = () => { H.alive = false; H.relays.forEach(r => r.close()); if (H.peer) H.peer.destroy(); };
     return H;
@@ -1562,6 +1564,7 @@ void main(){
         if (!m || (m.to && m.to !== myId)) return; if (!C.chosen && m.to !== myId) return;
         rel.lastRx = Date.now();
         const v = C.chosen;
+        if (m.t === 'bye-host' && v && rel !== v && C.relays.includes(rel)) { onMsg(m); return; }   // the host's goodbye counts on any relay
         if (v && v.publish && rel !== v && C.relays.includes(rel)) {      // failover: chosen relay went quiet, this one delivers
           if (Date.now() - (v.lastRx || 0) > 2500) { C.chosen = rel; C.kind = 'relay ' + url.split('/')[2]; L('client failover', C.kind); }
           else return;
@@ -1609,6 +1612,7 @@ void main(){
       if ((el > MIN && decided) || el > CAP) { clearInterval(ft); onFail(upAt || peerOpen || peerNo ? 'timeout' : 'nonet'); }
     }, 400);
     C.send = m => { const v = C.chosen; if (!v) return; if (LOSS && Math.random() < LOSS) return; if (v.publish) v.publish(up, m); else if (v.open) v.send(m); };
+    C.sendAll = m => { if (LOSS && Math.random() < LOSS) return; for (const r of C.relays) if (r.ok) r.publish(up, m); if (C.conn && C.conn.open) C.conn.send(m); };
     C.close = () => { C.alive = false; clearInterval(hi); clearInterval(wd); clearInterval(ft); C.relays.forEach(r => r.close()); if (C.peer) C.peer.destroy(); };
     return C;
   };
@@ -1676,7 +1680,7 @@ void main(){
   const sess0 = ss.get('sess');
   const sid = qs.get('id') || ss.get('id') || rid(); ss.set('id', sid);
   // the name is only remembered once the player chose it themselves; otherwise every visit gets a fresh cute one
-  const me = { id: sid, name: qs.get('name') || (sess0 && sess0.name) || (n => n && !NAMES.includes(n) && n !== '豆包' ? n : null)(store.get('name', null)) || pickName(), color: (sess0 && COLORS.includes(sess0.color) && sess0.color) || store.get('color', COLORS[(Math.random() * 6) | 0]) };
+  const me = { id: sid, name: qs.get('name') || (sess0 && sess0.name) || (n => n && !NAMES.includes(n) && n !== '豆包' ? n : null)(store.get('name', null)) || (n => NAMES.includes(n) ? n : null)(store.get('autoname', null)) || (n => (store.set('autoname', n), n))(pickName()), color: (sess0 && COLORS.includes(sess0.color) && sess0.color) || store.get('color', COLORS[(Math.random() * 6) | 0]) };
   const isWx = /MicroMessenger/i.test(navigator.userAgent);
   S.vmax = VMAX; S.topPad = 46; S.botPad = 34;
 
@@ -1687,7 +1691,7 @@ void main(){
   const V = { role: 'none', phase: 'menu', players: {}, items: {}, endAt: 0, countAt: 0, gust: null, code: '', hostId: '', rank: null, last: 0, ep: -1, R: ROUND * 1000, pkSeen: {}, pend: {}, rtt: 120 };
   const PH = { lobby: 0, count: 1, play: 2, end: 3 };
   const trace = (...a) => { (V.trace = V.trace || []).push(Math.round(performance.now()) + ' ' + a.join(' ')); if (V.trace.length > 40) V.trace.shift(); };
-  window.__game = { V, me, get G() { return G; }, get net() { return net; } };
+  window.__game = { V, me, get G() { return G; }, get net() { return net; }, place(u, v) { const L = S.lamb; L.u = u; L.v = v; [L.x, L.y] = Scene.toPx(u, v); L.vx = L.vy = 0; L.mode = 'idle'; } };
   const lambs = {};                // id -> Scene lamb
   let G = null, net = null;        // host state / transport
 
@@ -1730,6 +1734,7 @@ void main(){
       clearInterval(setNet.i); setNet.i = setInterval(() => { if (G && net) setNet(setNet.last); else clearInterval(setNet.i); }, 2000);
     }
     hostLoop.i && clearInterval(hostLoop.i); hostLoop.prev = now(); hostLoop.i = setInterval(hostLoop, 50);
+    clearInterval(failsafe.i); failsafe.i = setInterval(failsafe, 250);
   }
   const NETDBG = qs.get('netdbg') === '1';
   function setNet(st) {
@@ -1750,6 +1755,7 @@ void main(){
     if (G.players[p.id]) { const q = G.players[p.id]; const nm = uniqName(clampName(p.name), p.id); if (nm !== q.name) { q.name = nm; lobbyDirty(); } q.seen = now(); q.goneAt = 0; return q; }
     if (Object.keys(G.players).length >= 6) return null;
     const q = G.players[p.id] = { id: p.id, name: uniqName(clampName(p.name), p.id), color: freeColor(p.color), bot: !!p.bot, score: 0, u: 0.2 + Math.random() * 0.6, v: 0.25 + Math.random() * 0.6, seen: now(), skill: p.skill };
+    if (G.phase === 'end' && G.rank) { const r = G.rank.find(x => x.id === p.id && !x.left); if (r) q.score = r.score; }   // re-added after the round ended: the final result stays frozen
     lobbyDirty(); return q;
   }
   function addBot() {
@@ -1763,20 +1769,21 @@ void main(){
   function onHostMsg(m, from) {
     if (!G) return;
     if (m.t === 'hi') {
+      if (G.gone && G.gone[from] && now() - G.gone[from] < 15000) return;   // a late/queued hello from someone who already said a hard goodbye: they are gone
       const p = addPlayer({ id: from, name: m.name, color: m.color });
       if (!p) { net.send({ t: 'full', to: from }, from); return; }
       net.send({ t: 'w', to: from, color: p.color, name: p.name, ph: G.phase, code: G.code, e: G.ep }, from); net.send(Object.assign(lobbyMsg(), { e: G.ep })); net.send(Object.assign(stateMsg(now()), { e: G.ep, to: from }), from);
       return;
     }
-    const p = G.players[from]; if (!p) { if (m.t !== 'bye') net.send({ t: 'who', to: from }, from); return; }
+    const p = G.players[from]; if (!p) { if (m.t === 'bye' && !m.soft) (G.gone = G.gone || {})[from] = now(); if (m.t !== 'bye' && !(G.gone && G.gone[from] && now() - G.gone[from] < 15000)) net.send({ t: 'who', to: from }, from); return; }
     p.seen = now();
     if (m.t === 'p') { if (Number.isFinite(m.u) && Number.isFinite(m.v)) movePlayer(p, m, from); }
-    else if (m.t === 'pi') net.send({ t: 'po', to: from, c: m.c }, from);
+    else if (m.t === 'pi') net.send({ t: 'po', to: from, c: m.c, ht: Math.round(now()) }, from);
     else if (m.t === 'c') { if (Number.isInteger(m.i)) claim(from, m.i); }
     else if (m.t === 'h') broadcast({ t: 'h', id: from });
     else if (m.t === 'bye') {
       if (m.soft) { p.goneAt = now(); return; }       // page is unloading (maybe a refresh): keep the seat for a few seconds
-      dropPlayer(from);
+      (G.gone = G.gone || {})[from] = now(); dropPlayer(from);
     }
   }
   function dropPlayer(id) {
@@ -1829,6 +1836,9 @@ void main(){
     }
   }
   function startRound() {
+    // anyone who is leaving (page hidden/closed) or has gone quiet must not be dealt into the new round
+    for (const p of Object.values(G.players)) if (!p.bot && p.id !== me.id && (p.goneAt || now() - p.seen > 5000)) dropPlayer(p.id);
+    if (!G.solo && Object.keys(G.players).length < 2) { $('bLobby').click(); toast('朋友都离开了，等人来了再开始吧', 2600); return; }
     broadcast(lobbyMsg());
     G.ep++; G.claims = {}; G.rank = null; G.leftRound = []; G.endWhy = '';
     for (const p of Object.values(G.players)) { p.score = 0; p.u = 0.15 + Math.random() * 0.7; p.v = 0.3 + Math.random() * 0.55; p.target = null; p.bud = BUD_MAX; p.pt = 0; p.hist = []; }
@@ -1845,6 +1855,11 @@ void main(){
     const hum = Object.values(G.players).filter(p => !p.bot);
     if (!pre && hum.length && Math.random() < 0.4) { const h = hum[(Math.random() * hum.length) | 0], a = Math.random() * 6.283, d = 0.12 + Math.random() * 0.2; u = Math.max(0.04, Math.min(0.96, h.u + Math.cos(a) * d)); v = Math.max(0.04, Math.min(0.96, h.v + Math.sin(a) * d)); }
     G.items[id] = { id, k, u, v, age: pre ? 0.5 : 0, dead: false };
+  }
+  // independent of hostLoop (and of animation frames): if anything ever throws or stalls there, the round still ends on time
+  function failsafe() {
+    if (!G) { clearInterval(failsafe.i); return; }
+    if ((G.phase === 'play' || G.phase === 'count') && now() >= G.endAt + 200) { trace('failsafe', G.ep); try { resolveClaims(now(), true); } catch (_) {} endRound(''); }
   }
   function hostLoop() {
     const t = now(), dt = Math.min(0.2, (t - hostLoop.prev) / 1000); hostLoop.prev = t;
@@ -1954,7 +1969,9 @@ void main(){
         saveSess(); break;
       case 'full': toast('房间已满（最多 6 只小羊）'); leave(); break;
       case 'who': if (net && net.send) net.send(hello()); break;
-      case 'po': if (Number.isFinite(m.c)) { const r = now() - m.c; if (r >= 0 && r < 5000) V.rtt = V.rtt * 0.7 + r * 0.3; } break;
+      case 'po': if (Number.isFinite(m.c)) { const t = now(), r = t - m.c; if (r >= 0 && r < 5000) { V.rtt = V.rtt * 0.7 + r * 0.3;
+        // round-trip clock sample: host time at reply vs the midpoint of our send/receive. A busy main thread delays only our receive, so this halves that error
+        if (Number.isFinite(m.ht) && r < 5000 && V.off != null && (V.phase === 'count' || V.phase === 'play')) { const smp = m.ht - (m.c + t) / 2; const q = V.ntpS = (V.ntpS || []).concat([[smp, r]]).slice(-6); V.ntpOff = q.reduce((a, b) => b[1] < a[1] ? b : a)[0]; V.ntp = [Math.round(V.ntpOff), Math.round(r)]; if (V.ntpOff > V.off && V.ntpOff - V.off < 4000) { V.off += (V.ntpOff - V.off) * 0.5; if (Number.isFinite(V.ea)) { V.endAt = V.ea - V.off; V.countAt = V.ca - V.off; } } } } } break;
       case 'fix': if (V.phase === 'play' || V.phase === 'count') { const L = S.lamb; L.u = m.u; L.v = m.v; [L.x, L.y] = Scene.toPx(L.u, L.v); L.vx = L.vy = 0; if (L.mode === 'walk' || L.mode === 'drag') L.mode = 'idle'; } break;
       case 'lobby': {
         V.hostId = m.host; const ps = {}, gone = [];
@@ -2021,13 +2038,20 @@ void main(){
   // true offset is near the *largest* samples: rise quickly toward a bigger sample, sink very slowly.
   function clockSync(m) {
     if (!Number.isFinite(m.ht) || !Number.isFinite(m.ea)) { if (Number.isFinite(m.rm)) { V.endAt = now() + m.rm; V.countAt = now() + (m.cd || 0); } return; }
-    const smp = m.ht - now();
-    if (V.off == null || Math.abs(smp - V.off) > 4000) V.off = smp;      // first sample, or a different host clock (host reopened the room)
-    else V.off += (smp - V.off) * (smp > V.off ? 0.35 : 0.01);
-    V.endAt = m.ea - V.off; V.countAt = m.ca - V.off;
+    const smp = m.ht - now(); V.lastSmp = smp;
+    if (V.off != null && Math.abs(smp - V.off) <= 4000) { V.off += (smp - V.off) * (smp > V.off ? 0.35 : 0.01); V.offCand = null; }
+    else {   // (re)lock: gather samples for 600 ms and keep the freshest (largest offset = least delayed). Messages queued during the reconnect arrive in a burst and are all stale
+      const c = V.offCand, t = now();
+      if (!c || t - c.t0 > 3000) V.offCand = { t0: t, max: smp, n: 1 };
+      else { c.max = Math.max(c.max, smp); c.n++; if (t - c.t0 >= 600 && c.n >= 3) { if (V.off == null) V.disp = null; V.off = c.max; V.offCand = null; } }
+    }
+    if (V.off != null && V.ntpOff != null && V.ntpOff > V.off && V.ntpOff - V.off < 4000) V.off = V.ntpOff;   // round-trip estimate (best of the last few pings) is a floor: one-way snapshots only ever under-estimate
+    if (V.off == null) return;                                          // not synced yet: the HUD shows --:-- meanwhile
+    V.ea = m.ea; V.ca = m.ca; V.endAt = m.ea - V.off; V.countAt = m.ca - V.off;
   }
   // displayed remaining time: ticks down with the local clock, may catch up downward (max 3x), never goes back up
   function shownRm(t) {
+    if (V.role === 'client' && V.off == null) return null;
     const raw = Math.max(0, V.endAt - t);
     if (V.dispEp !== V.phEp || V.disp == null) { V.dispEp = V.phEp; V.disp = raw; V.dispT = t; return raw; }
     const el = Math.max(0, t - V.dispT); V.dispT = t;
@@ -2054,6 +2078,7 @@ void main(){
   function enterRoomView() { trace('room', V.ep, V.phase); rollbackAll(); V.phEp = V.ep; V.phase = 'lobby'; V.items = {}; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; hud(false); show('room'); renderRoom.k = ''; renderRoom(); }
   // ---- client-side prediction bookkeeping for pickups ----
   function undoPrediction(pr, stolen) {
+    trace('undo', pr.iid, stolen ? 'stolen' : 'late');
     for (const f of FX.texts) if (f.iid === pr.iid) f.life = 0;
     const [x, y] = pr.xy; FX.texts.push({ x, y: y - S.r0 * 0.5, txt: stolen ? '被抢先了' : '差一点', c: '#fff8e6', life: 0.9, small: true });
     const it = V.items[pr.iid]; if (it && !V.pkSeen[pr.iid]) { delete V.items[pr.iid]; }   // the next snapshot re-adds it if it still exists
@@ -2155,6 +2180,7 @@ void main(){
   // outcome of a finished round, shared by the end sequence and the results card
   function outcome(rank, why) {
     const live = rank.filter(r => !r.left), w = live[0];
+    if (why === 'hostleft') return { kind: 'void', title: '本局不算数', msg: '房主已离开，房间关闭了' };
     if (why === 'left' || !w) return { kind: 'void', title: '本局不算数', msg: '有人提前离开了，这局不分胜负' };
     if (w.score === 0) return { kind: 'zero', title: '平局', msg: '谁都还没拾到花瓣，再来一局吧' };
     const tied = live.filter(r => r.score === w.score);
@@ -2178,7 +2204,7 @@ void main(){
     }
     $('count').textContent = '';
     $('rTitle').textContent = o.title;
-    setTimeout(() => { if (V.phase === 'end') showResults(rank, why); }, o.kind === 'void' ? 1200 : 2300);
+    setTimeout(() => { if (V.phase === 'end') showResults(rank, why); }, why === 'hostleft' ? 250 : o.kind === 'void' ? 1200 : 2300);
     if (o.kind === 'void') toast(o.msg, 2400); else if (!won) toast(o.kind === 'win' ? `${o.w.name} 拾得最多` : o.msg, 2000);
   }
   function avatar(color, size = 132) {
@@ -2295,9 +2321,9 @@ void main(){
     }
     if (V.phase === 'play' && V.cdShown > 0 && t >= V.countAt) { const e = $('count'); V.cdShown = 0; e.textContent = '开始'; e.classList.remove('go'); e.offsetWidth; e.classList.add('go'); Sfx.tick(true); }
     if (V.phase === 'play') { S.lamb.frozen = false; V.endFrozen = false; }
-    const rm = V.phase === 'count' ? V.R : shownRm(t), sec = Math.ceil(rm / 1000);
-    $('tnum').textContent = `${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}`;
-    $('tbar').style.transform = `scaleX(${Math.min(1, rm / V.R)})`;
+    const rm0 = V.phase === 'count' ? V.R : shownRm(t), rm = rm0 == null ? V.R : rm0, sec = Math.ceil(rm / 1000);
+    $('tnum').textContent = rm0 == null ? '--' : `${(sec / 60) | 0}:${String(sec % 60).padStart(2, '0')}`;
+    $('tbar').style.transform = `scaleX(${rm0 == null ? 1 : Math.min(1, rm / V.R)})`;
     const hurry = V.phase === 'play' && sec <= 10; $('timer').classList.toggle('hurry', hurry);
     if (hurry && sec !== V.lastTick && sec > 0) { V.lastTick = sec; Sfx.tick(false, true); if (sec === 10) toast('最后十秒 · 金花瓣变多了', 1800); }
     const ps = Object.values(V.players).sort((a, b) => b.score - a.score);
@@ -2356,14 +2382,14 @@ void main(){
   $('bAgain').onclick = () => { if (G) { startRound(); } };
   $('bLobby').onclick = () => { if (V.role === 'solo' || V.role === 'client') { leave(); return; } if (G) { G.phase = 'lobby'; G.ep++; G.items = {}; G.claims = {}; lobbyDirty(); V.phase = 'lobby'; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; enterLobby(); renderRoom(); broadcast(lobbyMsg()); } };
   $('bExit').onclick = () => leave();
-  function resetView() { V.off = null; V.disp = null; V.ep = -1; V.phEp = -1; V.pkSeen = {}; V.pend = {}; V.joinedOnce = false; V.R = ROUND * 1000; V.players = {}; V.items = {}; V.rank = null; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; FX.texts.length = 0; }
+  function resetView() { V.ntpS = null; V.ntpOff = null; V.off = null; V.offCand = null; V.disp = null; V.ep = -1; V.phEp = -1; V.pkSeen = {}; V.pend = {}; V.joinedOnce = false; V.R = ROUND * 1000; V.players = {}; V.items = {}; V.rank = null; endFx.on = false; V.endFrozen = false; S.lamb.frozen = false; FX.texts.length = 0; }
   // host is gone: a round in progress is void for everyone (same rule as when a joiner leaves), then back to the menu
   function hostGone(msg) {
     if (V.role !== 'client' || hostGone.on) return;
     if (V.phase === 'count' || V.phase === 'play') {
       hostGone.on = true; if (net) { try { net.close(); } catch (_) {} net = null; } clearInterval(join.i);
       const rank = Object.values(V.players).map(p => ({ id: p.id, name: p.name, color: p.color, score: p.score || 0, bot: p.bot, left: p.id === V.hostId })).sort((a, b) => b.score - a.score);
-      finishRound(rank, 'left'); $('rMsg').textContent = '房间已关闭';
+      finishRound(rank, 'hostleft'); $('rMsg').textContent = '房主已离开，房间关闭了';
       setTimeout(() => { hostGone.on = false; if (V.role === 'client' && !net) { toast(msg, 3500); leave(true); } }, 5200);
     } else { toast(msg, 3500); leave(true); }
   }
@@ -2372,19 +2398,22 @@ void main(){
   }
   function join(code, opt) {
     opt = opt || {}; if (net) { try { net.close(); } catch (_) {} net = null; }
+    if (opt.keep) { V.last = now(); }      // link dropped mid-round: reconnect quietly, keep the round on screen
+    else {
     resetView(); V.role = 'client'; V.code = code; V.phase = 'lobby'; V.joined = false; V.hostAway = 0;
     joinHead(opt.from || 'link');
     $('joinMsg').textContent = opt.from === 'rejoin' ? '正在回到房间…' : '正在进入房间…'; $('joinMsg').classList.remove('err');
-    show('join'); $('joinCode').textContent = code; $('bJoin').disabled = true; $('bJoin').textContent = '进入房间';
+    show('join'); } $('joinCode').textContent = code; $('bJoin').disabled = true; $('bJoin').textContent = '进入房间';
     const mine = net = Net.join(code, me.id, hello, m => onClientMsg(m), why => {
       if (V.role !== 'client' || net !== mine) return;
       if (why === 'timeout' || why === 'nonet') {
-        if (V.joined) { toast('和房主失去联系了，房间可能已经关闭', 3500); leave(true); return; }
+        if (V.joined || opt.keep) { V.joined = true; hostGone('和房主失去联系了，房间可能已经关闭'); return; }
         $('bJoin').disabled = false; $('bJoin').textContent = '再试一次'; $('joinMsg').classList.add('err');
         $('joinMsg').textContent = why === 'nonet' ? '连不上联机服务器。换个网络（比如关掉 Wi‑Fi 用 4G）再试。'
           : opt.from === 'code' ? `没有找到房间 ${code}。请核对四个字母，或者让房主回到游戏页面后再试。` : '没找到房间：房主可能还没回到游戏页，或者房间已经关闭。';
         net.close(); net = null; ss.del('sess');
-      } else if (V.joined && !join.relost) { join.relost = 1; toast('连接断了，正在重连…', 2500); join(code, { from: 'rejoin', slow: true }); }
+      } else if ((V.joined || opt.keep) && !join.relost) { join.relost = 1; toast('连接断了，正在重连…', 2500); join(code, { from: 'rejoin', slow: true, keep: V.phase === 'count' || V.phase === 'play' }); }
+      else if (V.joined && (V.phase === 'count' || V.phase === 'play')) hostGone('和房主失去联系了，房间可能已经关闭');
       else { toast('和房主断开了', 3000); leave(); }
     }, { slow: !!opt.slow || opt.from === 'rejoin' });
     if (opt.from !== 'rejoin') join.relost = 0;
@@ -2401,10 +2430,10 @@ void main(){
   function leave(quiet) {
     if (net) {   // say goodbye a few times (lossy links), then close
       const n = net, msg = V.role === 'host' ? { t: 'bye-host' } : { t: 'bye', from: me.id };
-      for (const d of [0, 120, 260]) setTimeout(() => { try { n.send(msg); } catch (_) {} }, d);
+      const say = () => { try { (n.sendAll || n.send)(msg); } catch (_) {} }; say(); for (const d of [120, 260]) setTimeout(say, d);   // first one synchronously: the page may be gone before any timer runs   // every live relay, not just the ones in use
       setTimeout(() => n.close(), 400); net = null;
     }
-    ss.del('sess'); clearInterval(hostLoop.i); clearInterval(join.i); clearInterval(setNet.i); G = null; V.role = 'none'; resetView(); setUrl(''); toMenu();
+    ss.del('sess'); clearInterval(hostLoop.i); clearInterval(failsafe.i); clearInterval(join.i); clearInterval(setNet.i); G = null; V.role = 'none'; resetView(); setUrl(''); toMenu();
   }
   // what a refresh needs to bring this tab back into the same room as the same lamb
   function saveSess() {
